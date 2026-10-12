@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RepoPilot - OSS Navigator</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            color: #212529;
+        }
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .repo-card {
+            background: #ffffff;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            transition: transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+        }
+        .repo-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 .5rem 1rem rgba(0,0,0,.08)!important;
+        }
+        .text-truncate-3 {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            min-height: 4.2em;
+        }
+        .avatar-sm {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+        }
+        .topic-pill {
+            font-size: 0.75rem;
+            background-color: #f1f3f5;
+            color: #495057;
+            text-decoration: none;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            display: inline-block;
+            margin-right: 0.25rem;
+            margin-bottom: 0.25rem;
+        }
+        .topic-pill:hover {
+            background-color: #e9ecef;
+            color: #212529;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="/">
+                <i class="bi bi-compass me-2 text-primary"></i> RepoPilot
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/">
+                            <i class="bi bi-search me-1"></i> Repository Analysis
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active fw-semibold" aria-current="page" href="/navigator/">
+                            <i class="bi bi-compass me-1"></i> OSS Navigator
+                        </a>
+                    </li>
+                </ul>
+                <span class="navbar-text text-light-50 small">
+                    Open Source Contribution Platform
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="container my-5">
+
+        <!-- Page Header -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10 text-center">
+                <h1 class="display-6 fw-bold mb-2">OSS Navigator</h1>
+                <p class="text-secondary fs-5 mb-0">
+                    Discover beginner-friendly open source projects, filter by language or interest, and inspect contributor readiness.
+                </p>
+            </div>
+        </div>
+
+        <!-- Filter Controls Card -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0 p-4 bg-white">
+                    <form method="GET" action="/navigator/" id="searchForm">
+                        <div class="row g-3 align-items-end">
+                            <!-- Keyword Search -->
+                            <div class="col-md-4">
+                                <label for="queryInput" class="form-label fw-semibold small text-muted">Keywords or Project Name</label>
+                                <div class="input-group">
+                                    <span class="input-group-text bg-white text-muted"><i class="bi bi-search"></i></span>
+                                    <input type="text"
+                                           class="form-control"
+                                           id="queryInput"
+                                           name="query"
+                                           placeholder="e.g. web, cli, api, automation"
+                                           value="{{ query }}">
+                                </div>
+                            </div>
+
+                            <!-- Language Dropdown -->
+                            <div class="col-md-3">
+                                <label for="langSelect" class="form-label fw-semibold small text-muted">Programming Language</label>
+                                <select class="form-select" id="langSelect" name="language">
+                                    <option value="" {% if not language %}selected{% endif %}>All Languages</option>
+                                    {% for lang in popular_languages %}
+                                    <option value="{{ lang|lower }}" {% if language|lower == lang|lower %}selected{% endif %}>
+                                        {{ lang }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <!-- Topic / Interest -->
+                            <div class="col-md-3">
+                                <label for="topicInput" class="form-label fw-semibold small text-muted">Topic / Technology</label>
+                                <input type="text"
+                                       class="form-control"
+                                       id="topicInput"
+                                       name="topic"
+                                       placeholder="e.g. beginner, web, ai"
+                                       value="{{ topic }}">
+                            </div>
+
+                            <!-- Min Stars -->
+                            <div class="col-md-2">
+                                <label for="starsInput" class="form-label fw-semibold small text-muted">Min Stars</label>
+                                <input type="number"
+                                       class="form-control"
+                                       id="starsInput"
+                                       name="min_stars"
+                                       min="0"
+                                       step="10"
+                                       value="{{ min_stars }}">
+                            </div>
+
+                            <!-- Filter Options Row -->
+                            <div class="col-12 d-flex flex-wrap justify-content-between align-items-center pt-2 border-top">
+                                <div class="form-check form-switch mb-2 mb-sm-0">
+                                    <input class="form-check-input"
+                                           type="checkbox"
+                                           role="switch"
+                                           id="beginnerCheck"
+                                           name="beginner_friendly"
+                                           {% if beginner_friendly %}checked{% endif %}>
+                                    <label class="form-check-label fw-semibold small text-dark" for="beginnerCheck">
+                                        <i class="bi bi-patch-check-fill text-success me-1"></i> Beginner-Friendly Only (has <code>good-first-issues</code>)
+                                    </label>
+                                </div>
+
+                                <div class="d-flex gap-2">
+                                    <a href="/navigator/" class="btn btn-outline-secondary btn-sm px-3">
+                                        <i class="bi bi-arrow-counterclockwise"></i> Reset
+                                    </a>
+                                    <button type="submit" class="btn btn-primary btn-sm px-4 fw-semibold">
+                                        <i class="bi bi-funnel-fill me-1"></i> Apply Filters
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+
+                    <!-- Quick Suggestions -->
+                    <div class="mt-3 pt-2 border-top small text-muted d-flex flex-wrap align-items-center gap-1">
+                        <span class="me-1 fw-semibold">Popular topics:</span>
+                        {% for top in popular_topics %}
+                            <a href="?topic={{ top }}&beginner_friendly=on&min_stars=50"
+                               class="badge bg-light text-secondary border text-decoration-none">
+                                #{{ top }}
+                            </a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Alert (Rate limit, network, etc.) -->
+        {% if error_message %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="alert alert-danger shadow-sm border-0 d-flex align-items-start" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill fs-5 me-2 mt-1"></i>
+                    <div>
+                        <h6 class="fw-bold mb-1">GitHub API Error</h6>
+                        <p class="mb-0 small">{{ error_message }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Results Section -->
+        {% if search_results %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <!-- Results Metadata -->
+                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="fw-bold mb-0">
+                            Discovered Repositories
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-6 ms-2">
+                                {{ search_results.total_count }} found
+                            </span>
+                        </h5>
+                    </div>
+                    <div class="text-muted small mt-2 mt-sm-0">
+                        Showing page {{ search_results.page }} of {{ search_results.total_pages }} (12 per page)
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                {% if search_results.total_count == 0 %}
+                <div class="card shadow-sm border-0 p-5 text-center bg-white my-4">
+                    <div class="text-muted mb-3">
+                        <i class="bi bi-folder-x display-4"></i>
+                    </div>
+                    <h5 class="fw-bold">No repositories matched your filters</h5>
+                    <p class="text-muted small mb-4">
+                        Try reducing minimum stars, clearing topics, or unchecking the "Beginner-Friendly Only" filter.
+                    </p>
+                    <div>
+                        <a href="/navigator/" class="btn btn-outline-primary btn-sm px-4">
+                            <i class="bi bi-arrow-counterclockwise me-1"></i> Reset to Default Filters
+                        </a>
+                    </div>
+                </div>
+                {% else %}
+
+                <!-- Repository Cards Grid -->
+                <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3 mb-4">
+                    {% for item in search_results.items %}
+                    <div class="col">
+                        <div class="card repo-card h-100 shadow-sm border-0 d-flex flex-column p-3">
+                            <!-- Card Header: Owner Avatar & Title -->
+                            <div class="d-flex align-items-start mb-2">
+                                {% if item.owner.avatar_url %}
+                                <img src="{{ item.owner.avatar_url }}" alt="{{ item.owner.login }}" class="avatar-sm me-2 mt-1 border">
+                                {% else %}
+                                <i class="bi bi-github fs-4 me-2"></i>
+                                {% endif %}
+                                <div class="flex-grow-1 text-truncate">
+                                    <div class="text-muted small text-truncate">{{ item.owner.login }}</div>
+                                    <a href="{{ item.html_url }}" target="_blank" rel="noopener noreferrer" class="fw-bold text-dark text-decoration-none h6 mb-0 text-truncate d-block" title="{{ item.name }}">
+                                        {{ item.name }} <i class="bi bi-box-arrow-up-right small text-muted" style="font-size: 0.75rem;"></i>
+                                    </a>
+                                </div>
+                            </div>
+
+                            <!-- Description -->
+                            <p class="card-text text-secondary small text-truncate-3 flex-grow-1 mb-2">
+                                {{ item.description|default:"No description provided by the repository." }}
+                            </p>
+
+                            <!-- Topics / Tags -->
+                            {% if item.topics %}
+                            <div class="mb-2" style="max-height: 28px; overflow: hidden;">
+                                {% for top in item.topics|slice:":3" %}
+                                <span class="topic-pill">#{{ top }}</span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+
+                            <!-- Statistics Bar -->
+                            <div class="d-flex justify-content-between text-muted small py-2 border-top border-bottom my-2">
+                                <span><i class="bi bi-star-fill text-warning me-1"></i>{{ item.stargazers_count }}</span>
+                                <span><i class="bi bi-bezier2 text-info me-1"></i>{{ item.forks_count }}</span>
+                                <span><i class="bi bi-exclamation-circle text-danger me-1"></i>{{ item.open_issues_count }}</span>
+                                {% if item.language %}
+                                <span class="badge bg-light text-dark border">{{ item.language }}</span>
+                                {% endif %}
+                            </div>
+
+                            <!-- Contributor Readiness Score or Action -->
+                            <div class="d-flex justify-content-between align-items-center pt-1">
+                                {% if item.readiness_score is not None %}
+                                    <span class="badge bg-{{ item.readiness_breakdown.level_class }} py-1 px-2" title="{{ item.readiness_breakdown.level_label }}">
+                                        <i class="bi bi-speedometer2 me-1"></i> Readiness: {{ item.readiness_score|floatformat:0 }}/100
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-light text-secondary border py-1 px-2" title="Not evaluated in RepoPilot yet">
+                                        <i class="bi bi-question-circle me-1"></i> Not analyzed
+                                    </span>
+                                {% endif %}
+
+                                <!-- Direct Action: Analyze in RepoPilot -->
+                                <form method="POST" action="/" class="d-inline">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="repo_url" value="{{ item.html_url }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Run full analysis in RepoPilot">
+                                        <i class="bi bi-search"></i> Analyze
+                                    </button>
+                                </form>
+                            </div>
+
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Pagination -->
+                {% if search_results.total_pages > 1 %}
+                <nav aria-label="Search results pages" class="my-4">
+                    <ul class="pagination justify-content-center">
+                        <!-- Previous Page -->
+                        {% if search_results.has_previous %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ search_results.page|add:-1 }}{% if querystring_base %}&{{ querystring_base }}{% endif %}" aria-label="Previous">
+                                <span aria-hidden="true">&laquo; Previous</span>
+                            </a>
+                        </li>
+                        {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">&laquo; Previous</span>
+                        </li>
+                        {% endif %}
+
+                        <!-- Current Page Indicator -->
+                        <li class="page-item active" aria-current="page">
+                            <span class="page-link">Page {{ search_results.page }} of {{ search_results.total_pages }}</span>
+                        </li>
+
+                        <!-- Next Page -->
+                        {% if search_results.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ search_results.page|add:1 }}{% if querystring_base %}&{{ querystring_base }}{% endif %}" aria-label="Next">
+                                <span aria-hidden="true">Next &raquo;</span>
+                            </a>
+                        </li>
+                        {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">Next &raquo;</span>
+                        </li>
+                        {% endif %}
+                    </ul>
+                </nav>
+                {% endif %}
+
+                {% endif %}
+
+            </div>
+        </div>
+        {% endif %}
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center text-muted py-4 border-top mt-5 bg-white">
+        <div class="container small">
+            RepoPilot &copy; 2026 — Open Source Contribution & Repository Analysis Platform
+        </div>
+    </footer>
+
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

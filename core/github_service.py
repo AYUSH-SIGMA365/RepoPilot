@@ -89,7 +89,9 @@ def _make_github_request(url: str, return_headers: bool = False):
     # Use GITHUB_TOKEN if configured in environment to avoid 60 req/hr IP limit
     token = os.environ.get("GITHUB_TOKEN")
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        token = token.strip().strip("'\"")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
     req = urllib.request.Request(url, headers=headers)
 
@@ -245,3 +247,99 @@ def analyze_and_save_repository(url: str) -> AnalyzedRepository:
         defaults=defaults,
     )
     return repo
+
+
+def search_github_repositories(
+    query: str = "",
+    language: str = "",
+    topic: str = "",
+    beginner_friendly: bool = False,
+    min_stars: int = 50,
+    sort: str = "stars",
+    order: str = "desc",
+    page: int = 1,
+    per_page: int = 12,
+) -> dict:
+    """
+    Searches public GitHub repositories using the GitHub REST API Search endpoint.
+    Builds structured queries combining language, topic, beginner-friendly qualifiers,
+    and minimum stars.
+    """
+    parts = ["is:public", "archived:false"]
+
+    clean_q = (query or "").strip()
+    if clean_q:
+        parts.append(clean_q)
+
+    clean_lang = (language or "").strip()
+    if clean_lang:
+        parts.append(f"language:{clean_lang}")
+
+    clean_topic = (topic or "").strip()
+    if clean_topic:
+        parts.append(f"topic:{clean_topic}")
+
+    if beginner_friendly:
+        parts.append("good-first-issues:>0")
+
+    try:
+        stars_val = max(0, int(min_stars))
+    except (ValueError, TypeError):
+        stars_val = 50
+
+    if stars_val > 0:
+        parts.append(f"stars:>={stars_val}")
+
+    full_query = " ".join(parts)
+
+    try:
+        page_num = max(1, int(page))
+    except (ValueError, TypeError):
+        page_num = 1
+
+    try:
+        per_page_num = max(1, min(100, int(per_page)))
+    except (ValueError, TypeError):
+        per_page_num = 12
+
+    params = {
+        "q": full_query,
+        "sort": sort,
+        "order": order,
+        "page": page_num,
+        "per_page": per_page_num,
+    }
+    encoded_params = urllib.parse.urlencode(params)
+    search_url = f"https://api.github.com/search/repositories?{encoded_params}"
+
+    result = _make_github_request(search_url, return_headers=True)
+    if not result:
+        return {
+            "total_count": 0,
+            "items": [],
+            "page": page_num,
+            "per_page": per_page_num,
+            "total_pages": 1,
+            "has_next": False,
+            "has_previous": False,
+            "query_used": full_query,
+        }
+
+    data, headers = result
+    total_count = data.get("total_count", 0) if isinstance(data, dict) else 0
+    items = data.get("items", []) if isinstance(data, dict) else []
+
+    # GitHub Search API caps total reachable results at 1,000 items
+    capped_total = min(total_count, 1000)
+    total_pages = max(1, (capped_total + per_page_num - 1) // per_page_num) if capped_total > 0 else 1
+
+    return {
+        "total_count": total_count,
+        "items": items,
+        "page": page_num,
+        "per_page": per_page_num,
+        "total_pages": total_pages,
+        "has_next": page_num < total_pages,
+        "has_previous": page_num > 1,
+        "query_used": full_query,
+    }

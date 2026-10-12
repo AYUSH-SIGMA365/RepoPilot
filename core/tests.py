@@ -9,6 +9,7 @@ from .scoring import calculate_readiness_score
 from .github_service import (
     parse_github_url,
     analyze_and_save_repository,
+    search_github_repositories,
     _fetch_collection_count,
     InvalidURLError,
     RepositoryNotFoundError,
@@ -519,3 +520,265 @@ class RepositoryReadinessScoringTests(TestCase):
 
         # Cleanup
         AnalyzedRepository.objects.filter(owner="score-test", name="repo").delete()
+
+
+class OSSNavigatorSearchServiceTests(TestCase):
+    @patch("core.github_service._make_github_request")
+    def test_search_query_builder_with_all_filters(self, mock_request):
+        mock_request.return_value = ({"total_count": 5, "items": []}, {})
+
+        search_github_repositories(
+            query="cli tool",
+            language="rust",
+            topic="terminal",
+            beginner_friendly=True,
+            min_stars=150,
+            page=2,
+            per_page=10,
+        )
+
+        mock_request.assert_called_once()
+        called_url = mock_request.call_args[0][0]
+        # Verify query string parameters and qualifiers
+        self.assertIn("is%3Apublic", called_url)
+        self.assertIn("archived%3Afalse", called_url)
+        self.assertIn("cli+tool", called_url)
+        self.assertIn("language%3Arust", called_url)
+        self.assertIn("topic%3Aterminal", called_url)
+        self.assertIn("good-first-issues%3A%3E0", called_url)
+        self.assertIn("stars%3A%3E%3D150", called_url)
+        self.assertIn("page=2", called_url)
+        self.assertIn("per_page=10", called_url)
+
+    @patch("core.github_service._make_github_request")
+    def test_search_query_builder_defaults(self, mock_request):
+        mock_request.return_value = ({"total_count": 0, "items": []}, {})
+
+        res = search_github_repositories()
+
+        mock_request.assert_called_once()
+        called_url = mock_request.call_args[0][0]
+        self.assertIn("is%3Apublic", called_url)
+        self.assertIn("archived%3Afalse", called_url)
+        self.assertIn("stars%3A%3E%3D50", called_url)
+        self.assertIn("page=1", called_url)
+        self.assertIn("per_page=12", called_url)
+        self.assertEqual(res["total_count"], 0)
+        self.assertEqual(res["items"], [])
+
+    @patch("core.github_service._make_github_request")
+    def test_search_pagination_calculation(self, mock_request):
+        mock_request.return_value = ({"total_count": 50, "items": [{"name": f"repo-{i}"} for i in range(10)]}, {})
+
+        # Page 1 of 5
+        res_p1 = search_github_repositories(page=1, per_page=10)
+        self.assertEqual(res_p1["total_pages"], 5)
+        self.assertFalse(res_p1["has_previous"])
+        self.assertTrue(res_p1["has_next"])
+
+        # Page 5 of 5
+        res_p5 = search_github_repositories(page=5, per_page=10)
+        self.assertEqual(res_p5["total_pages"], 5)
+        self.assertTrue(res_p5["has_previous"])
+        self.assertFalse(res_p5["has_next"])
+
+    @patch("core.github_service._make_github_request")
+    def test_search_rate_limit_error(self, mock_request):
+        mock_request.side_effect = RateLimitError("GitHub API rate limit exceeded.")
+        with self.assertRaises(RateLimitError):
+            search_github_repositories()
+
+    @patch("core.github_service._make_github_request")
+    def test_search_network_error(self, mock_request):
+        mock_request.side_effect = NetworkError("Connection timed out")
+        with self.assertRaises(NetworkError):
+            search_github_repositories()
+
+
+class OSSNavigatorViewTests(TestCase):
+    def setUp(self):
+        self.client = Client(SERVER_NAME="localhost")
+
+    @patch("core.views.search_github_repositories")
+    def test_navigator_page_get_default(self, mock_search):
+        mock_search.return_value = {
+            "total_count": 2,
+            "items": [
+                {
+                    "name": "flask",
+                    "full_name": "pallets/flask",
+                    "owner": {"login": "pallets", "avatar_url": "https://avatar.url/pallets"},
+                    "html_url": "https://github.com/pallets/flask",
+                    "description": "Python micro framework",
+                    "language": "Python",
+                    "stargazers_count": 75000,
+                    "forks_count": 16000,
+                    "open_issues_count": 20,
+                    "topics": ["python", "web", "framework"],
+                }
+            ],
+            "page": 1,
+            "per_page": 12,
+            "total_pages": 1,
+            "has_next": False,
+            "has_previous": False,
+            "query_used": "is:public archived:false good-first-issues:>0 stars:>=50",
+        }
+
+        response = self.client.get(reverse("navigator"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "OSS Navigator")
+        self.assertContains(response, "pallets/flask")
+        self.assertContains(response, "75000")
+        self.assertContains(response, "Apply Filters")
+
+        # Confirm default beginner-friendly filter was passed
+        mock_search.assert_called_once()
+        call_kwargs = mock_search.call_args[1]
+        self.assertTrue(call_kwargs["beginner_friendly"])
+        self.assertEqual(call_kwargs["min_stars"], 50)
+
+    @patch("core.views.search_github_repositories")
+    def test_navigator_page_with_filters(self, mock_search):
+        mock_search.return_value = {
+            "total_count": 1,
+            "items": [],
+            "page": 1,
+            "per_page": 12,
+            "total_pages": 1,
+            "has_next": False,
+            "has_previous": False,
+            "query_used": "filtered",
+        }
+
+        response = self.client.get(reverse("navigator"), {
+            "query": "web framework",
+            "language": "python",
+            "topic": "api",
+            "min_stars": "200",
+            "beginner_friendly": "on",
+        })
+        self.assertEqual(response.status_code, 200)
+        mock_search.assert_called_once()
+        call_kwargs = mock_search.call_args[1]
+        self.assertEqual(call_kwargs["query"], "web framework")
+        self.assertEqual(call_kwargs["language"], "python")
+        self.assertEqual(call_kwargs["topic"], "api")
+        self.assertEqual(call_kwargs["min_stars"], 200)
+        self.assertTrue(call_kwargs["beginner_friendly"])
+
+    @patch("core.views.search_github_repositories")
+    def test_navigator_displays_existing_readiness_score(self, mock_search):
+        # Create an existing analyzed repo in PostgreSQL
+        AnalyzedRepository.objects.filter(owner="pallets-nav", name="flask").delete()
+        AnalyzedRepository.objects.create(
+            owner="pallets-nav",
+            name="flask",
+            url="https://github.com/pallets-nav/flask",
+            readiness_score=85,
+            has_readme=True,
+            has_license=True,
+        )
+
+        mock_search.return_value = {
+            "total_count": 2,
+            "items": [
+                {
+                    "name": "flask",
+                    "full_name": "pallets-nav/flask",
+                    "owner": {"login": "pallets-nav", "avatar_url": ""},
+                    "html_url": "https://github.com/pallets-nav/flask",
+                    "description": "Analyzed repo",
+                    "language": "Python",
+                    "stargazers_count": 50000,
+                    "forks_count": 10000,
+                    "open_issues_count": 5,
+                    "topics": [],
+                },
+                {
+                    "name": "unexamined-project",
+                    "full_name": "unknown-org/unexamined-project",
+                    "owner": {"login": "unknown-org", "avatar_url": ""},
+                    "html_url": "https://github.com/unknown-org/unexamined-project",
+                    "description": "Brand new project",
+                    "language": "Go",
+                    "stargazers_count": 120,
+                    "forks_count": 15,
+                    "open_issues_count": 2,
+                    "topics": [],
+                },
+            ],
+            "page": 1,
+            "per_page": 12,
+            "total_pages": 1,
+            "has_next": False,
+            "has_previous": False,
+            "query_used": "test",
+        }
+
+        response = self.client.get(reverse("navigator"))
+        self.assertEqual(response.status_code, 200)
+
+        # Analyzed repo should display its saved Readiness Score
+        self.assertContains(response, "pallets-nav/flask")
+        self.assertContains(response, "Readiness: 85/100")
+
+        # Unanalyzed repo should display "Not analyzed" and NOT invent a score
+        self.assertContains(response, "unexamined-project")
+        self.assertContains(response, "Not analyzed")
+        self.assertNotContains(response, "Readiness: 0/100")
+
+        # Cleanup
+        AnalyzedRepository.objects.filter(owner="pallets-nav", name="flask").delete()
+
+    @patch("core.views.search_github_repositories")
+    def test_navigator_pagination_links_preserve_query_params(self, mock_search):
+        mock_search.return_value = {
+            "total_count": 50,
+            "items": [],
+            "page": 1,
+            "per_page": 12,
+            "total_pages": 5,
+            "has_next": True,
+            "has_previous": False,
+            "query_used": "test",
+        }
+
+        response = self.client.get(reverse("navigator"), {
+            "language": "python",
+            "topic": "web",
+            "min_stars": "50",
+            "beginner_friendly": "on",
+        })
+        self.assertEqual(response.status_code, 200)
+        # Next link should contain page=2 and preserve other GET parameters
+        self.assertContains(response, "page=2")
+        self.assertContains(response, "language=python")
+        self.assertContains(response, "topic=web")
+
+    @patch("core.views.search_github_repositories")
+    def test_navigator_rate_limit_error_display(self, mock_search):
+        mock_search.side_effect = RateLimitError("GitHub API rate limit exceeded. Please try again later or add a GITHUB_TOKEN.")
+
+        response = self.client.get(reverse("navigator"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "GitHub API Error")
+        self.assertContains(response, "GitHub API rate limit exceeded")
+
+    @patch("core.views.search_github_repositories")
+    def test_navigator_empty_results_state(self, mock_search):
+        mock_search.return_value = {
+            "total_count": 0,
+            "items": [],
+            "page": 1,
+            "per_page": 12,
+            "total_pages": 1,
+            "has_next": False,
+            "has_previous": False,
+            "query_used": "no matches",
+        }
+
+        response = self.client.get(reverse("navigator"), {"query": "nonexistent_repo_xyz_12345"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No repositories matched your filters")
+        self.assertContains(response, "Reset to Default Filters")
