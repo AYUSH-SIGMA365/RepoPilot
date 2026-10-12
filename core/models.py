@@ -38,3 +38,7 @@ class AnalyzedRepository(models.Model):
 
     def __str__(self):
         return f"{self.owner}/{self.name}"
+
+    def get_readiness_breakdown(self):
+        from .scoring import calculate_readiness_score
+        return calculate_readiness_score(self)

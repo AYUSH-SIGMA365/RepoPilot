@@ -1,8 +1,11 @@
 import urllib.error
+from datetime import datetime, timedelta, timezone as dt_timezone
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.utils import timezone
 from .models import AnalyzedRepository
+from .scoring import calculate_readiness_score
 from .github_service import (
     parse_github_url,
     analyze_and_save_repository,
@@ -245,3 +248,274 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "0")
         self.assertContains(response, "Version Tags")
         self.assertContains(response, "522")
+
+    @patch("core.views.analyze_and_save_repository")
+    def test_dashboard_displays_readiness_score_and_breakdown(self, mock_analyze):
+        fixed_now = datetime(2026, 10, 13, 12, 0, 0, tzinfo=dt_timezone.utc)
+        mock_repo = AnalyzedRepository(
+            owner="psf",
+            name="black",
+            url="https://github.com/psf/black",
+            description="The uncompromising Python code formatter",
+            primary_language="Python",
+            stars_count=35000,
+            open_issues_count=120,
+            open_prs_count=15,
+            releases_count=30,
+            tags_count=45,
+            has_readme=True,
+            has_license=True,
+            has_contributing=True,
+            has_code_of_conduct=True,
+            has_security=False,  # Missing 5 pts -> Total 95 pts (with recent activity)
+            last_activity_at=fixed_now - timedelta(days=10),
+            readiness_score=95,
+        )
+        mock_analyze.return_value = mock_repo
+
+        with patch("core.scoring.timezone.now", return_value=fixed_now):
+            response = self.client.post(reverse("home"), {"repo_url": "https://github.com/psf/black"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Repository Readiness Score")
+        self.assertContains(response, "95")
+        self.assertContains(response, "/100")
+        self.assertContains(response, "High Readiness")
+        self.assertContains(response, "Readiness Criteria Breakdown")
+        self.assertContains(response, "README Documentation")
+        self.assertContains(response, "CONTRIBUTING Guide")
+        self.assertContains(response, "Open Source License")
+        self.assertContains(response, "Recent Repository Activity")
+        self.assertContains(response, "Primary Programming Language")
+        self.assertContains(response, "Code of Conduct")
+        self.assertContains(response, "Repository Description")
+        self.assertContains(response, "Security Policy")
+        self.assertContains(response, "Missing Criteria for New Contributors")
+        self.assertContains(response, "measures contributor onboarding readiness, not code or project quality")
+
+
+class RepositoryReadinessScoringTests(TestCase):
+    def setUp(self):
+        self.fixed_now = datetime(2026, 10, 13, 12, 0, 0, tzinfo=dt_timezone.utc)
+
+    def test_all_criteria_satisfied_produces_100(self):
+        data = {
+            "has_readme": True,
+            "has_license": True,
+            "has_contributing": True,
+            "has_code_of_conduct": True,
+            "has_security": True,
+            "description": "Comprehensive open-source repository",
+            "primary_language": "Python",
+            "last_activity_at": self.fixed_now - timedelta(days=2),
+        }
+        res = calculate_readiness_score(data, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 100)
+        self.assertEqual(res["level_class"], "success")
+        self.assertEqual(res["level_label"], "High Readiness")
+        self.assertEqual(len(res["missing_criteria"]), 0)
+        self.assertEqual(len(res["criteria"]), 8)
+
+    def test_all_criteria_unsatisfied_produces_0(self):
+        data = {
+            "has_readme": False,
+            "has_license": False,
+            "has_contributing": False,
+            "has_code_of_conduct": False,
+            "has_security": False,
+            "description": "",
+            "primary_language": "",
+            "last_activity_at": None,
+        }
+        res = calculate_readiness_score(data, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 0)
+        self.assertEqual(res["level_class"], "danger")
+        self.assertEqual(res["level_label"], "Low Readiness")
+        self.assertEqual(len(res["missing_criteria"]), 8)
+
+    def test_documentation_and_community_criteria_independently(self):
+        # 1. README alone (20 pts)
+        res = calculate_readiness_score({"has_readme": True}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 20)
+
+        # 2. License alone (15 pts)
+        res = calculate_readiness_score({"has_license": True}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 15)
+
+        # 3. CONTRIBUTING alone (20 pts)
+        res = calculate_readiness_score({"has_contributing": True}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 20)
+
+        # 4. Code of Conduct alone (10 pts)
+        res = calculate_readiness_score({"has_code_of_conduct": True}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 10)
+
+        # 5. Security policy alone (5 pts)
+        res = calculate_readiness_score({"has_security": True}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 5)
+
+    def test_description_and_primary_language_scoring(self):
+        # Description: non-empty -> 5 pts
+        res = calculate_readiness_score({"description": "A valid description."}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 5)
+
+        # Description: whitespace only -> 0 pts
+        res = calculate_readiness_score({"description": "   \n\t  "}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 0)
+
+        # Description: None -> 0 pts
+        res = calculate_readiness_score({"description": None}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 0)
+
+        # Primary language: non-empty -> 10 pts
+        res = calculate_readiness_score({"primary_language": "Python"}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 10)
+
+        # Primary language: whitespace only -> 0 pts
+        res = calculate_readiness_score({"primary_language": "   "}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 0)
+
+        # Primary language: None -> 0 pts
+        res = calculate_readiness_score({"primary_language": None}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 0)
+
+    def test_activity_within_30_days(self):
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=15)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 15)
+
+    def test_activity_31_to_90_days_ago(self):
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=50)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 10)
+
+    def test_activity_91_to_180_days_ago(self):
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=120)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 5)
+
+    def test_activity_older_than_180_days(self):
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=200)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 0)
+
+    def test_missing_activity_date(self):
+        res = calculate_readiness_score({"last_activity_at": None}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 0)
+
+    def test_activity_date_boundary_cases(self):
+        # 0 days ago (exact now) -> 15 pts
+        res = calculate_readiness_score({"last_activity_at": self.fixed_now}, now=self.fixed_now)
+        self.assertEqual(res["total_score"], 15)
+
+        # Exactly 30 days ago -> 15 pts
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=30)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 15)
+
+        # Exactly 31 days ago -> 10 pts
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=31)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 10)
+
+        # Exactly 90 days ago -> 10 pts
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=90)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 10)
+
+        # Exactly 91 days ago -> 5 pts
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=91)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 5)
+
+        # Exactly 180 days ago -> 5 pts
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=180)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 5)
+
+        # Exactly 181 days ago -> 0 pts
+        res = calculate_readiness_score(
+            {"last_activity_at": self.fixed_now - timedelta(days=181)},
+            now=self.fixed_now,
+        )
+        self.assertEqual(res["total_score"], 0)
+
+    @patch("core.github_service._fetch_collection_count")
+    @patch("core.github_service._make_github_request")
+    def test_score_recalculation_when_repository_information_changes(self, mock_request, mock_count):
+        # Clean up test repo
+        AnalyzedRepository.objects.filter(owner="score-test", name="repo").delete()
+
+        # Initial analysis: only readme and primary language present (20 + 10 = 30)
+        mock_request.side_effect = lambda url, return_headers=False: (
+            {"Python": 500} if "languages" in url else (
+                {"files": {"readme": {"url": "readme"}}} if "community/profile" in url else {
+                    "description": "",
+                    "language": "Python",
+                    "stargazers_count": 10,
+                    "forks_count": 2,
+                    "open_issues_count": 1,
+                    "pushed_at": "2020-01-01T00:00:00Z",  # very old -> 0 pts
+                    "license": None,
+                }
+            )
+        )
+        mock_count.side_effect = lambda url: 0
+
+        repo = analyze_and_save_repository("https://github.com/score-test/repo")
+        self.assertEqual(repo.readiness_score, 30)
+
+        # Second analysis / refresh: project adds license, contributing guide, code of conduct,
+        # description, and recent activity
+        recent_pushed = (timezone.now() - timedelta(days=5)).isoformat()
+        mock_request.side_effect = lambda url, return_headers=False: (
+            {"Python": 500} if "languages" in url else (
+                {
+                    "files": {
+                        "readme": {"url": "readme"},
+                        "license": {"url": "license"},
+                        "contributing": {"url": "contributing"},
+                        "code_of_conduct": {"url": "coc"},
+                        "security": None,
+                    }
+                } if "community/profile" in url else {
+                    "description": "Now with great docs!",
+                    "language": "Python",
+                    "stargazers_count": 50,
+                    "forks_count": 10,
+                    "open_issues_count": 2,
+                    "pushed_at": recent_pushed,
+                    "license": {"name": "MIT"},
+                }
+            )
+        )
+
+        repo_updated = analyze_and_save_repository("https://github.com/score-test/repo")
+
+        # Recalculated score: README (20) + License (15) + Contributing (20) + CoC (10) +
+        # Description (5) + Language (10) + Activity (15) = 95
+        self.assertEqual(repo_updated.readiness_score, 95)
+        # Verify persistence in database
+        persisted = AnalyzedRepository.objects.get(owner="score-test", name="repo")
+        self.assertEqual(persisted.readiness_score, 95)
+
+        # Cleanup
+        AnalyzedRepository.objects.filter(owner="score-test", name="repo").delete()

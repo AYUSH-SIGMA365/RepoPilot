@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 from django.utils.dateparse import parse_datetime
 from .models import AnalyzedRepository
+from .scoring import calculate_readiness_score
 
 
 class GitHubServiceError(Exception):
@@ -210,10 +211,12 @@ def fetch_github_metadata(owner: str, name: str) -> dict:
 
 def analyze_and_save_repository(url: str) -> AnalyzedRepository:
     """
-    Validates URL, fetches data from GitHub, and saves/updates the record in PostgreSQL.
+    Validates URL, fetches data from GitHub, calculates the readiness score,
+    and saves/updates the record in PostgreSQL.
     """
     owner, name = parse_github_url(url)
     metadata = fetch_github_metadata(owner, name)
+    scoring_result = calculate_readiness_score(metadata)
 
     defaults = {
         "url": metadata["url"],
@@ -232,6 +235,7 @@ def analyze_and_save_repository(url: str) -> AnalyzedRepository:
         "has_contributing": metadata["has_contributing"],
         "has_code_of_conduct": metadata["has_code_of_conduct"],
         "has_security": metadata["has_security"],
+        "readiness_score": scoring_result["total_score"],
     }
 
     # update_or_create ensures idempotence and respects the unique constraint on (owner, name)
