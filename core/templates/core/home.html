@@ -3,10 +3,280 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RepoPilot Home</title>
+    <title>RepoPilot - Repository Analysis</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            color: #212529;
+        }
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .metric-card {
+            background: #ffffff;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            padding: 1rem;
+            text-align: center;
+            transition: transform 0.15s ease-in-out;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+        .metric-val {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #0d6efd;
+        }
+        .metric-label {
+            font-size: 0.85rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+        .check-pill {
+            font-size: 0.9rem;
+            padding: 0.4rem 0.8rem;
+        }
+    </style>
 </head>
 <body>
-    <h1>Welcome to RepoPilot</h1>
-    <p>This is the simple home page for our Django project.</p>
+
+    <!-- Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="/">
+                <i class="bi bi-compass me-2 text-primary"></i> RepoPilot
+            </a>
+            <span class="navbar-text text-light-50 small">
+                Repository Analysis Module
+            </span>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="container my-5">
+
+        <!-- Header & Search Form -->
+        <div class="row justify-content-center mb-5">
+            <div class="col-lg-8 text-center">
+                <h1 class="display-6 fw-bold mb-3">Analyze Any Public GitHub Repository</h1>
+                <p class="text-secondary mb-4">
+                    Enter a GitHub repository URL to inspect its community standards, activity, and contribution readiness.
+                </p>
+
+                <!-- Django Messages (Alerts) -->
+                {% if messages %}
+                    {% for message in messages %}
+                        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible fade show text-start shadow-sm" role="alert">
+                            {% if message.tags == 'error' %}
+                                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                            {% else %}
+                                <i class="bi bi-check-circle-fill me-2"></i>
+                            {% endif %}
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+
+                <!-- Analysis Form -->
+                <form method="POST" action="/" class="card p-3 shadow-sm border-0">
+                    {% csrf_token %}
+                    <div class="input-group input-group-lg">
+                        <span class="input-group-text bg-white border-end-0">
+                            <i class="bi bi-github text-secondary"></i>
+                        </span>
+                        <input type="url"
+                               name="repo_url"
+                               class="form-control border-start-0 ps-0"
+                               placeholder="https://github.com/pallets/flask"
+                               value="{{ input_url }}"
+                               required>
+                        <button class="btn btn-primary px-4 fw-semibold" type="submit">
+                            <i class="bi bi-search me-1"></i> Analyze
+                        </button>
+                    </div>
+                    <div class="form-text text-start mt-2 text-muted">
+                        Format: <code>https://github.com/owner/repository</code> (e.g. <code>https://github.com/django/django</code>)
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Analyzed Repository Dashboard (If active) -->
+        {% if analyzed_repo %}
+        <div class="row justify-content-center mb-5">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-white border-bottom py-3 d-flex flex-wrap justify-content-between align-items-center">
+                        <div>
+                            <span class="badge bg-secondary me-2">{{ analyzed_repo.owner }}</span>
+                            <a href="{{ analyzed_repo.url }}" target="_blank" rel="noopener noreferrer" class="h4 mb-0 text-decoration-none text-dark fw-bold align-middle">
+                                {{ analyzed_repo.name }} <i class="bi bi-box-arrow-up-right small text-muted"></i>
+                            </a>
+                        </div>
+                        <div class="mt-2 mt-sm-0">
+                            {% if analyzed_repo.primary_language %}
+                                <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-6">
+                                    {{ analyzed_repo.primary_language }}
+                                </span>
+                            {% endif %}
+                            <span class="badge bg-light text-muted border ms-1">
+                                Last updated: {{ analyzed_repo.updated_at|date:"M d, Y H:i" }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="card-body p-4">
+                        <!-- Description -->
+                        <p class="card-text text-secondary mb-4 fs-5">
+                            {{ analyzed_repo.description|default:"No description provided for this repository." }}
+                        </p>
+
+                        <!-- Key Metrics Grid -->
+                        <h5 class="fw-bold mb-3"><i class="bi bi-bar-chart-line text-primary me-2"></i>Key Statistics</h5>
+                        <div class="row row-cols-2 row-cols-sm-3 row-cols-lg-6 g-3 mb-4">
+                            <div class="col">
+                                <div class="metric-card h-100">
+                                    <div class="metric-val"><i class="bi bi-star-fill text-warning me-1"></i>{{ analyzed_repo.stars_count|default:"0" }}</div>
+                                    <div class="metric-label">Stars</div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="metric-card h-100">
+                                    <div class="metric-val"><i class="bi bi-bezier2 text-info me-1"></i>{{ analyzed_repo.forks_count|default:"0" }}</div>
+                                    <div class="metric-label">Forks</div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="metric-card h-100">
+                                    <div class="metric-val"><i class="bi bi-exclamation-circle text-danger me-1"></i>{{ analyzed_repo.open_issues_count|default:"0" }}</div>
+                                    <div class="metric-label">Open Issues</div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="metric-card h-100">
+                                    <div class="metric-val"><i class="bi bi-git text-primary me-1"></i>{{ analyzed_repo.open_prs_count|default:"0" }}</div>
+                                    <div class="metric-label">Open PRs</div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="metric-card h-100">
+                                    <div class="metric-val"><i class="bi bi-tag text-success me-1"></i>{{ analyzed_repo.releases_count|default:"0" }}</div>
+                                    <div class="metric-label">Releases</div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="metric-card h-100">
+                                    <div class="metric-val"><i class="bi bi-tags text-secondary me-1"></i>{{ analyzed_repo.tags_count|default:"0" }}</div>
+                                    <div class="metric-label">Version Tags</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Community Standards Checklist -->
+                        <h5 class="fw-bold mb-3"><i class="bi bi-shield-check text-success me-2"></i>Community Standards & Health</h5>
+                        <div class="d-flex flex-wrap gap-2 mb-4">
+                            <span class="badge check-pill {% if analyzed_repo.has_readme %}bg-success{% else %}bg-secondary{% endif %}">
+                                <i class="bi {% if analyzed_repo.has_readme %}bi-check-circle-fill{% else %}bi-x-circle{% endif %} me-1"></i> README
+                            </span>
+                            <span class="badge check-pill {% if analyzed_repo.has_license %}bg-success{% else %}bg-secondary{% endif %}">
+                                <i class="bi {% if analyzed_repo.has_license %}bi-check-circle-fill{% else %}bi-x-circle{% endif %} me-1"></i> LICENSE
+                            </span>
+                            <span class="badge check-pill {% if analyzed_repo.has_contributing %}bg-success{% else %}bg-secondary{% endif %}">
+                                <i class="bi {% if analyzed_repo.has_contributing %}bi-check-circle-fill{% else %}bi-x-circle{% endif %} me-1"></i> CONTRIBUTING.md
+                            </span>
+                            <span class="badge check-pill {% if analyzed_repo.has_code_of_conduct %}bg-success{% else %}bg-secondary{% endif %}">
+                                <i class="bi {% if analyzed_repo.has_code_of_conduct %}bi-check-circle-fill{% else %}bi-x-circle{% endif %} me-1"></i> CODE_OF_CONDUCT.md
+                            </span>
+                            <span class="badge check-pill {% if analyzed_repo.has_security %}bg-success{% else %}bg-secondary{% endif %}">
+                                <i class="bi {% if analyzed_repo.has_security %}bi-check-circle-fill{% else %}bi-x-circle{% endif %} me-1"></i> SECURITY.md
+                            </span>
+                        </div>
+
+                        <!-- Language Breakdown -->
+                        {% if analyzed_repo.languages %}
+                            <h5 class="fw-bold mb-3"><i class="bi bi-code-slash text-dark me-2"></i>Languages Breakdown</h5>
+                            <div class="d-flex flex-wrap gap-2">
+                                {% for lang, bytes in analyzed_repo.languages.items %}
+                                    <span class="badge bg-light text-dark border p-2">
+                                        <strong>{{ lang }}</strong>: {{ bytes|filesizeformat }}
+                                    </span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+
+                        <!-- Activity Footer -->
+                        <div class="mt-4 pt-3 border-top text-muted small d-flex justify-content-between">
+                            <span><i class="bi bi-clock me-1"></i> Last GitHub Push: {{ analyzed_repo.last_activity_at|default:"N/A" }}</span>
+                            <span><i class="bi bi-database me-1"></i> Stored in PostgreSQL (<code>oss_platform</code>)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Recently Analyzed Repositories -->
+        {% if recent_repos %}
+        <div class="row justify-content-center">
+            <div class="col-lg-10">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="fw-bold mb-0"><i class="bi bi-clock-history me-2 text-primary"></i>Recently Analyzed Repositories</h5>
+                    <span class="badge bg-secondary-subtle text-secondary">{{ recent_repos|length }} in database</span>
+                </div>
+                <div class="row g-3">
+                    {% for repo in recent_repos %}
+                    <div class="col-md-6 col-lg-4">
+                        <div class="card h-100 shadow-sm border-0">
+                            <div class="card-body d-flex flex-column">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <h6 class="card-title fw-bold text-truncate mb-0" style="max-width: 75%;">
+                                        {{ repo.owner }}/{{ repo.name }}
+                                    </h6>
+                                    <span class="badge bg-light text-dark border small">
+                                        <i class="bi bi-star-fill text-warning"></i> {{ repo.stars_count }}
+                                    </span>
+                                </div>
+                                <p class="card-text text-muted small flex-grow-1 text-truncate-2" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                                    {{ repo.description|default:"No description" }}
+                                </p>
+                                <div class="d-flex justify-content-between align-items-center pt-2 border-top mt-2">
+                                    <span class="badge bg-primary-subtle text-primary">{{ repo.primary_language|default:"Unknown" }}</span>
+                                    <!-- Re-analyze button -->
+                                    <form method="POST" action="/" class="d-inline">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="repo_url" value="{{ repo.url }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Refresh analysis">
+                                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center text-muted py-4 border-top mt-5 bg-white">
+        <div class="container small">
+            RepoPilot &copy; 2026 — Open Source Contribution & Repository Analysis Platform
+        </div>
+    </footer>
+
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
