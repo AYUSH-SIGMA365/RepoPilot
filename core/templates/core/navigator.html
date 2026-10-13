@@ -79,6 +79,11 @@
                             <i class="bi bi-compass me-1"></i> OSS Navigator
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/mentor/">
+                            <i class="bi bi-mortarboard me-1"></i> OSS Mentor
+                        </a>
+                    </li>
                 </ul>
                 <span class="navbar-text text-light-50 small">
                     Open Source Contribution Platform
@@ -286,7 +291,19 @@
                             <div class="d-flex justify-content-between text-muted small py-2 border-top border-bottom my-2">
                                 <span><i class="bi bi-star-fill text-warning me-1"></i>{{ item.stargazers_count }}</span>
                                 <span><i class="bi bi-bezier2 text-info me-1"></i>{{ item.forks_count }}</span>
-                                <span><i class="bi bi-exclamation-circle text-danger me-1"></i>{{ item.open_issues_count }}</span>
+                                {% if item.analyzed_record %}
+                                    {% if not item.has_issues %}
+                                    <span title="GitHub Issues Disabled (External tracker)"><i class="bi bi-slash-circle text-secondary me-1"></i>N/A</span>
+                                    {% elif item.issues_count_is_stale %}
+                                    <span title="Search API unavailable during refresh; showing last-known count (Stale)" class="text-warning"><i class="bi bi-clock-history text-warning me-1"></i>{{ item.open_issues_count }} (Stale)</span>
+                                    {% elif item.open_issues_count is not None %}
+                                    <span title="Verified Open Issues (excludes PRs)"><i class="bi bi-exclamation-circle text-danger me-1"></i>{{ item.open_issues_count }}</span>
+                                    {% else %}
+                                    <span title="GitHub Search API unavailable; issue count could not be verified" class="text-muted"><i class="bi bi-dash-circle text-muted me-1"></i>Unavailable</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span title="Unanalyzed in RepoPilot (Analyze repository to verify issue-only count)"><i class="bi bi-question-circle text-muted me-1"></i>Unanalyzed</span>
+                                {% endif %}
                                 {% if item.language %}
                                 <span class="badge bg-light text-dark border">{{ item.language }}</span>
                                 {% endif %}
@@ -312,6 +329,9 @@
                                         <i class="bi bi-search"></i> Analyze
                                     </button>
                                 </form>
+                                    <a href="/mentor/?repo={{ item.full_name }}" class="btn btn-sm btn-outline-success py-0 px-2 ms-1" title="Start onboarding checklist in OSS Mentor">
+                                        <i class="bi bi-mortarboard"></i> Mentor
+                                    </a>
                             </div>
 
                         </div>

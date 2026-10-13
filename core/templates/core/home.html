@@ -68,6 +68,11 @@
                             <i class="bi bi-compass me-1"></i> OSS Navigator
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/mentor/">
+                            <i class="bi bi-mortarboard me-1"></i> OSS Mentor
+                        </a>
+                    </li>
                 </ul>
                 <span class="navbar-text text-light-50 small">
                     Open Source Contribution Platform
@@ -147,6 +152,9 @@
                             <span class="badge bg-light text-muted border ms-1">
                                 Last updated: {{ analyzed_repo.updated_at|date:"M d, Y H:i" }}
                             </span>
+                            <a href="/mentor/?repo={{ analyzed_repo.owner }}/{{ analyzed_repo.name }}" class="btn btn-sm btn-outline-success ms-2">
+                                <i class="bi bi-mortarboard me-1"></i> Start Onboarding
+                            </a>
                         </div>
                     </div>
 
@@ -252,8 +260,8 @@
                             </div>
                             <div class="col">
                                 <div class="metric-card h-100">
-                                    <div class="metric-val"><i class="bi bi-exclamation-circle text-danger me-1"></i>{{ analyzed_repo.open_issues_count|default:"0" }}</div>
-                                    <div class="metric-label">Open Issues</div>
+                                    <div class="metric-val"><i class="bi bi-exclamation-circle {% if not analyzed_repo.has_issues %}text-secondary{% elif analyzed_repo.issues_count_is_stale %}text-warning{% elif analyzed_repo.open_issues_count is None %}text-muted{% else %}text-danger{% endif %} me-1"></i>{{ analyzed_repo.display_issues_count }}</div>
+                                    <div class="metric-label">{{ analyzed_repo.issues_label }}</div>
                                 </div>
                             </div>
                             <div class="col">
@@ -360,6 +368,9 @@
                                             <i class="bi bi-arrow-clockwise"></i> Refresh
                                         </button>
                                     </form>
+                                    <a href="/mentor/?repo={{ repo.owner }}/{{ repo.name }}" class="btn btn-sm btn-outline-success py-0 px-2 ms-1" title="Mentor onboarding guide">
+                                        <i class="bi bi-mortarboard"></i> Mentor
+                                    </a>
                                 </div>
                             </div>
                         </div>

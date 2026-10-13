@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RepoPilot - OSS Mentor</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            color: #212529;
+        }
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .step-card {
+            border-radius: 10px;
+            transition: all 0.2s ease-in-out;
+            border: 1px solid #e9ecef;
+        }
+        .step-card.completed {
+            background-color: #f8fbf9;
+            border-color: #b7eb8f;
+        }
+        .step-card:hover {
+            box-shadow: 0 .25rem .75rem rgba(0,0,0,.06);
+        }
+        .readme-preview {
+            background-color: #f1f3f5;
+            font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.825rem;
+            max-height: 220px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="/">
+                <i class="bi bi-compass me-2 text-primary"></i> RepoPilot
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/">
+                            <i class="bi bi-search me-1"></i> Repository Analysis
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/navigator/">
+                            <i class="bi bi-compass me-1"></i> OSS Navigator
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active fw-semibold" aria-current="page" href="/mentor/">
+                            <i class="bi bi-mortarboard me-1"></i> OSS Mentor
+                        </a>
+                    </li>
+                </ul>
+                <span class="navbar-text text-light-50 small">
+                    Open Source Contribution Platform
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="container my-5">
+
+        <!-- Page Header -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10 text-center">
+                <h1 class="display-6 fw-bold mb-2">
+                    <i class="bi bi-mortarboard-fill text-success me-2"></i>OSS Mentor
+                </h1>
+                <p class="text-secondary fs-5 mb-0">
+                    Personalized onboarding assistant for open source contributors. Step-by-step guidance from reading documentation to landing your first pull request.
+                </p>
+            </div>
+        </div>
+
+        <!-- Repository Selector Card -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0 p-4 bg-white">
+                    <form method="GET" action="/mentor/" id="mentorForm">
+                        <label for="repo_input" class="form-label fw-bold">Select or Enter a Public GitHub Repository</label>
+                        <div class="input-group mb-3">
+                            <span class="input-group-text bg-light"><i class="bi bi-github"></i></span>
+                            <input type="text"
+                                   class="form-control"
+                                   id="repo_input"
+                                   name="repo_url"
+                                   value="{{ input_repo }}"
+                                   placeholder="https://github.com/owner/repository or owner/repository"
+                                   required>
+                            <button class="btn btn-success px-4" type="submit">
+                                <i class="bi bi-compass me-1"></i> Load Guide
+                            </button>
+                        </div>
+                    </form>
+
+                    <!-- Quick Picks from Analyzed Repos -->
+                    {% if analyzed_repos %}
+                    <div class="d-flex align-items-center flex-wrap gap-2 pt-2 border-top">
+                        <span class="text-muted small fw-semibold">Quick Select:</span>
+                        {% for item in analyzed_repos %}
+                        <a href="/mentor/?repo={{ item.owner }}/{{ item.name }}"
+                           class="badge bg-light text-dark border text-decoration-none py-2 px-3 {% if repo_data and repo_data.owner == item.owner and repo_data.name == item.name %}border-success bg-success-subtle{% endif %}">
+                            <i class="bi bi-folder2-open me-1 text-primary"></i>{{ item.owner }}/{{ item.name }}
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Message Alert -->
+        {% if error_message %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="alert alert-danger d-flex align-items-center shadow-sm" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill flex-shrink-0 me-3 fs-4"></i>
+                    <div>
+                        <strong>Unable to load onboarding guide:</strong> {{ error_message }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Connection / Documentation Warning Alert -->
+        {% if doc_warning %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="alert alert-warning d-flex align-items-center shadow-sm" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill flex-shrink-0 me-3 fs-4"></i>
+                    <div>
+                        <strong>Connection Notice:</strong> {{ doc_warning }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if repo_data %}
+        <!-- Repository Overview & Documentation Card -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-white border-bottom py-3 d-flex flex-wrap justify-content-between align-items-center">
+                        <div class="d-flex align-items-center">
+                            <span class="badge bg-secondary me-2">{{ repo_data.owner }}</span>
+                            <a href="{{ repo_data.url }}" target="_blank" rel="noopener noreferrer" class="h4 mb-0 text-decoration-none text-dark fw-bold">
+                                {{ repo_data.name }} <i class="bi bi-box-arrow-up-right small text-muted"></i>
+                            </a>
+                        </div>
+                        <div class="mt-2 mt-sm-0 d-flex gap-2 align-items-center">
+                            {% if repo_data.primary_language %}
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-6">
+                                {{ repo_data.primary_language }}
+                            </span>
+                            {% endif %}
+                            {% if selected_repo and selected_repo.readiness_score is not None %}
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle fs-6" title="Readiness Score">
+                                <i class="bi bi-speedometer2 me-1"></i> Readiness: {{ selected_repo.readiness_score|floatformat:0 }}/100
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="card-body p-4">
+                        <p class="card-text text-secondary mb-4 fs-6">
+                            {{ repo_data.description|default:"No description provided for this repository." }}
+                        </p>
+
+                        <!-- Key Metrics -->
+                        <div class="row row-cols-2 row-cols-sm-4 g-3 mb-4">
+                            <div class="col">
+                                <div class="bg-light p-2 rounded text-center border">
+                                    <div class="fw-bold text-dark"><i class="bi bi-star-fill text-warning me-1"></i>{{ repo_data.stars_count|default:"0" }}</div>
+                                    <div class="text-muted small">Stars</div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="bg-light p-2 rounded text-center border">
+                                    <div class="fw-bold text-dark"><i class="bi bi-bezier2 text-info me-1"></i>{{ repo_data.forks_count|default:"0" }}</div>
+                                    <div class="text-muted small">Forks</div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="bg-light p-2 rounded text-center border">
+                                    <div class="fw-bold text-dark">
+                                        <i class="bi bi-exclamation-circle {% if not repo_data.has_issues %}text-secondary{% elif repo_data.issues_count_is_stale %}text-warning{% elif repo_data.open_issues_count is None %}text-muted{% else %}text-danger{% endif %} me-1"></i>
+                                        {% if not repo_data.has_issues %}
+                                            <span class="badge bg-secondary-subtle text-secondary">N/A</span>
+                                        {% elif repo_data.issues_count_is_stale %}
+                                            {{ repo_data.open_issues_count }} <span class="badge bg-warning text-dark small" title="GitHub Search API unavailable; showing last-known count">Stale</span>
+                                        {% elif repo_data.open_issues_count is not None %}
+                                            {{ repo_data.open_issues_count }}
+                                        {% else %}
+                                            <span class="badge bg-secondary-subtle text-secondary" title="GitHub Search API unavailable; count could not be verified">Unavailable</span>
+                                        {% endif %}
+                                    </div>
+                                    <div class="text-muted small">
+                                        {% if not repo_data.has_issues %}
+                                            Issues (External/N/A)
+                                        {% elif repo_data.issues_count_is_stale %}
+                                            Open Issues (Stale)
+                                        {% elif repo_data.open_issues_count is None %}
+                                            Open Issues (Unavailable)
+                                        {% else %}
+                                            Open Issues
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="bg-light p-2 rounded text-center border">
+                                    <div class="fw-bold text-dark"><i class="bi bi-clock-history text-secondary me-1"></i>{{ repo_data.last_activity_at|default:"N/A"|truncatechars:10 }}</div>
+                                    <div class="text-muted small">Last Activity</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {% if not repo_data.has_issues %}
+                        <div class="alert alert-info py-2 px-3 small mb-4 d-flex align-items-center">
+                            <i class="bi bi-info-circle-fill me-2 fs-5 text-primary"></i>
+                            <div>
+                                <strong>Issue Tracking:</strong> GitHub Issues are disabled for this repository.
+                                {% if repo_data.issue_tracker_url or doc_data.issue_tracker_url %}
+                                    Official issue tracking is managed at: <a href="{{ repo_data.issue_tracker_url|default:doc_data.issue_tracker_url }}" target="_blank" rel="noopener noreferrer" class="alert-link fw-bold">{{ repo_data.issue_tracker_url|default:doc_data.issue_tracker_url }}</a>
+                                {% elif doc_data.contributing_url %}
+                                    Please consult the <a href="{{ doc_data.contributing_url }}" target="_blank" rel="noopener noreferrer" class="alert-link">Contributing Guide</a> for instructions on ticket reporting.
+                                {% else %}
+                                    Please consult the project documentation for issue reporting guidelines.
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% elif repo_data.issues_count_is_stale %}
+                        <div class="alert alert-warning py-2 px-3 small mb-4 d-flex align-items-center">
+                            <i class="bi bi-clock-history me-2 fs-5 text-warning"></i>
+                            <div>
+                                <strong>Search API Notice:</strong> GitHub Search API was temporarily unavailable during the latest refresh. Displaying last-known issue count (<strong>{{ repo_data.open_issues_count }}</strong>).
+                            </div>
+                        </div>
+                        {% elif repo_data.open_issues_count is None %}
+                        <div class="alert alert-secondary py-2 px-3 small mb-4 d-flex align-items-center">
+                            <i class="bi bi-dash-circle me-2 fs-5 text-secondary"></i>
+                            <div>
+                                <strong>Issue Count Notice:</strong> GitHub Search API was unavailable, so a live issue count could not be retrieved. Issues can still be browsed directly on GitHub.
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Documentation Health Status -->
+                        <h6 class="fw-bold mb-3"><i class="bi bi-file-earmark-check text-success me-2"></i>Verified Documentation Standards</h6>
+                        <div class="d-flex flex-wrap gap-2 mb-4">
+                            <!-- README -->
+                            {% if doc_data.has_readme %}
+                            <a href="{{ repo_data.url }}#readme" target="_blank" rel="noopener noreferrer" class="badge bg-success-subtle text-success border border-success-subtle text-decoration-none py-2 px-3">
+                                <i class="bi bi-check-circle-fill me-1"></i> README.md
+                            </a>
+                            {% else %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle py-2 px-3">
+                                <i class="bi bi-x-circle me-1"></i> Missing README
+                            </span>
+                            {% endif %}
+
+                            <!-- CONTRIBUTING -->
+                            {% if doc_data.contributing_url %}
+                            <a href="{{ doc_data.contributing_url }}" target="_blank" rel="noopener noreferrer" class="badge bg-success-subtle text-success border border-success-subtle text-decoration-none py-2 px-3">
+                                <i class="bi bi-check-circle-fill me-1"></i> Contributing Guide
+                            </a>
+                            {% else %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle py-2 px-3">
+                                <i class="bi bi-x-circle me-1"></i> Missing Contributing Guide
+                            </span>
+                            {% endif %}
+
+                            <!-- CODE OF CONDUCT -->
+                            {% if doc_data.code_of_conduct_url %}
+                            <a href="{{ doc_data.code_of_conduct_url }}" target="_blank" rel="noopener noreferrer" class="badge bg-success-subtle text-success border border-success-subtle text-decoration-none py-2 px-3">
+                                <i class="bi bi-check-circle-fill me-1"></i> Code of Conduct
+                            </a>
+                            {% else %}
+                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle py-2 px-3">
+                                <i class="bi bi-dash-circle me-1"></i> No Code of Conduct
+                            </span>
+                            {% endif %}
+
+                            <!-- LICENSE -->
+                            {% if doc_data.license_url or repo_data.has_license %}
+                            <a href="{{ doc_data.license_url|default:repo_data.url }}" target="_blank" rel="noopener noreferrer" class="badge bg-success-subtle text-success border border-success-subtle text-decoration-none py-2 px-3">
+                                <i class="bi bi-check-circle-fill me-1"></i> License: {{ repo_data.license_name|default:"Open Source" }}
+                            </a>
+                            {% else %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle py-2 px-3">
+                                <i class="bi bi-x-circle me-1"></i> No License Detected
+                            </span>
+                            {% endif %}
+
+                            <!-- SECURITY -->
+                            {% if doc_data.security_url or repo_data.has_security_policy %}
+                            <a href="{{ doc_data.security_url|default:repo_data.url }}" target="_blank" rel="noopener noreferrer" class="badge bg-success-subtle text-success border border-success-subtle text-decoration-none py-2 px-3">
+                                <i class="bi bi-shield-check me-1"></i> Security Policy
+                            </a>
+                            {% else %}
+                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle py-2 px-3">
+                                <i class="bi bi-shield-slash me-1"></i> No Security Policy
+                            </span>
+                            {% endif %}
+                        </div>
+
+                        {% if doc_data.community_error %}
+                        <div class="text-muted small mb-3 fst-italic">
+                            <i class="bi bi-info-circle text-warning me-1"></i> Live community standards check timed out. Showing saved or default standards.
+                        </div>
+                        {% endif %}
+
+                        <!-- Safe README Preview -->
+                        <div class="border rounded p-3 bg-light">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="fw-bold small text-secondary">
+                                    <i class="bi bi-file-text me-1"></i> README Preview (Safe Excerpt)
+                                </span>
+                                <a href="{{ repo_data.url }}#readme" target="_blank" rel="noopener noreferrer" class="small text-decoration-none">
+                                    View Full on GitHub <i class="bi bi-box-arrow-up-right"></i>
+                                </a>
+                            </div>
+                            {% if doc_data.readme_excerpt %}
+                            <pre class="readme-preview p-3 rounded mb-0">{{ doc_data.readme_excerpt }}</pre>
+                            {% elif doc_data.readme_error %}
+                            <div class="alert alert-warning py-2 px-3 small mb-0 d-flex align-items-center">
+                                <i class="bi bi-wifi-off me-2 fs-5"></i>
+                                <div>
+                                    <strong>README unavailable due to network timeout:</strong> {{ doc_data.readme_error }}
+                                    <span class="d-block mt-1">You can view the README directly on GitHub: <a href="{{ repo_data.url }}#readme" target="_blank" rel="noopener noreferrer" class="alert-link">Open README on GitHub <i class="bi bi-box-arrow-up-right small"></i></a></span>
+                                </div>
+                            </div>
+                            {% elif doc_data.has_readme and doc_data.readme_excerpt == "" %}
+                            <div class="text-muted small fst-italic py-2">
+                                <i class="bi bi-info-circle me-1"></i> The README file exists on GitHub but is currently empty.
+                            </div>
+                            {% else %}
+                            <div class="text-muted small fst-italic py-2">
+                                <i class="bi bi-info-circle me-1"></i> No README content was found for this repository.
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Onboarding Progress Bar -->
+        {% if checklist %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0 p-4 bg-white">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h5 class="fw-bold mb-0">
+                            <i class="bi bi-check2-square text-success me-2"></i>Your Onboarding Progress
+                        </h5>
+                        <span class="badge {% if checklist.is_all_completed %}bg-success{% elif checklist.progress_percentage >= 50 %}bg-primary{% else %}bg-secondary{% endif %} fs-6">
+                            {{ checklist.completed_count }} / {{ checklist.total_count }} Completed ({{ checklist.progress_percentage }}%)
+                        </span>
+                    </div>
+
+                    <div class="progress mb-2" style="height: 12px;">
+                        <div class="progress-bar {% if checklist.is_all_completed %}bg-success{% elif checklist.progress_percentage >= 50 %}bg-primary{% else %}bg-info{% endif %} progress-bar-striped progress-bar-animated"
+                             role="progressbar"
+                             style="width: {{ checklist.progress_percentage }}%;"
+                             aria-valuenow="{{ checklist.progress_percentage }}"
+                             aria-valuemin="0"
+                             aria-valuemax="100">
+                        </div>
+                    </div>
+
+                    {% if checklist.is_all_completed %}
+                    <div class="alert alert-success mt-3 mb-0 py-2 d-flex align-items-center" role="alert">
+                        <i class="bi bi-trophy-fill fs-4 text-warning me-3"></i>
+                        <div>
+                            <strong>Congratulations!</strong> You have completed all 10 onboarding steps for <strong>{{ repo_data.name }}</strong>! You are ready to submit your first contribution!
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="text-muted small">
+                        <i class="bi bi-info-circle me-1"></i> Check off steps as you complete them. Progress is automatically saved for your session.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- 10-Step Interactive Onboarding Checklist -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <h5 class="fw-bold mb-3">
+                    <i class="bi bi-list-ol text-primary me-2"></i>Actionable Onboarding Steps
+                </h5>
+
+                <div class="vstack gap-3">
+                    {% for step in checklist.steps %}
+                    <div class="card step-card shadow-sm {% if step.is_completed %}completed{% endif %}">
+                        <div class="card-body p-4">
+                            <div class="d-flex align-items-start justify-content-between gap-3">
+                                <div class="d-flex align-items-start gap-3">
+                                    <!-- Step Toggle Form -->
+                                    <form method="POST" action="{% url 'mentor_toggle_step' %}" class="d-inline">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="step_id" value="{{ step.id }}">
+                                        <input type="hidden" name="repo_owner" value="{{ repo_data.owner }}">
+                                        <input type="hidden" name="repo_name" value="{{ repo_data.name }}">
+                                        <button type="submit"
+                                                class="btn btn-link p-0 text-decoration-none border-0"
+                                                title="{% if step.is_completed %}Mark as incomplete{% else %}Mark as completed{% endif %}">
+                                            {% if step.is_completed %}
+                                            <i class="bi bi-check-circle-fill text-success fs-3"></i>
+                                            {% else %}
+                                            <i class="bi bi-circle text-secondary fs-3"></i>
+                                            {% endif %}
+                                        </button>
+                                    </form>
+
+                                    <div>
+                                        <div class="d-flex align-items-center gap-2 mb-1">
+                                            <span class="badge bg-light text-dark border">Step {{ step.step_number }}</span>
+                                            <span class="badge bg-secondary-subtle text-secondary">{{ step.phase }}</span>
+                                            {% if step.is_completed %}
+                                            <span class="badge bg-success-subtle text-success">
+                                                <i class="bi bi-check-lg"></i> Completed
+                                            </span>
+                                            {% endif %}
+                                        </div>
+                                        <h5 class="card-title fw-bold mb-2 {% if step.is_completed %}text-decoration-line-through text-muted{% endif %}">
+                                            {{ step.title }}
+                                        </h5>
+                                        <p class="card-text text-secondary mb-2">
+                                            {{ step.description }}
+                                        </p>
+                                        <div class="bg-light p-2 rounded border small text-dark mb-2">
+                                            <strong><i class="bi bi-lightbulb text-warning me-1"></i>Guidance:</strong> {{ step.guidance }}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Action Link Button -->
+                                {% if step.link_url %}
+                                <div class="text-nowrap mt-1">
+                                    <a href="{{ step.link_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary">
+                                        <i class="bi bi-box-arrow-up-right me-1"></i> {{ step.link_text }}
+                                    </a>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Contribution Preparation Summary Card -->
+        <div class="row justify-content-center mb-5">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0 bg-white p-4">
+                    <h5 class="fw-bold mb-3">
+                        <i class="bi bi-clipboard2-check text-primary me-2"></i>Contribution Preparation Summary
+                    </h5>
+                    <div class="row g-4 align-items-center">
+                        <div class="col-md-7">
+                            <p class="text-secondary mb-3">
+                                You have completed <strong>{{ checklist.completed_count }}</strong> out of <strong>{{ checklist.total_count }}</strong> recommended preparation milestones for <strong>{{ repo_data.owner }}/{{ repo_data.name }}</strong>.
+                                {% if checklist.remaining_count > 0 %}
+                                Follow the remaining {{ checklist.remaining_count }} step{{ checklist.remaining_count|pluralize }} before opening your pull request to maximize your acceptance rate.
+                                {% else %}
+                                All standards and best practices have been checked. You are ready to open your contribution with confidence!
+                                {% endif %}
+                            </p>
+                            <div class="d-flex flex-wrap gap-2">
+                                <!-- View in Repository Analysis -->
+                                <form method="POST" action="/" class="d-inline">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="repo_url" value="{{ repo_data.url }}">
+                                    <button type="submit" class="btn btn-primary" title="View Full Contributor Readiness Score">
+                                        <i class="bi bi-speedometer2 me-1"></i> Full Readiness Score
+                                    </button>
+                                </form>
+
+                                <!-- Explore More in OSS Navigator -->
+                                <a href="/navigator/?{% if repo_data.primary_language %}language={{ repo_data.primary_language }}&{% endif %}beginner_friendly=1" class="btn btn-outline-secondary">
+                                    <i class="bi bi-compass me-1"></i> Explore Related Repos
+                                </a>
+
+                                <!-- Open GitHub Issues / External Tracker -->
+                                {% if repo_data.has_issues %}
+                                <a href="{{ repo_data.url }}/issues?q=is%3Aissue+is%3Aopen" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark">
+                                    <i class="bi bi-github me-1"></i> Browse Issues on GitHub
+                                </a>
+                                {% elif repo_data.issue_tracker_url or doc_data.issue_tracker_url %}
+                                <a href="{{ repo_data.issue_tracker_url|default:doc_data.issue_tracker_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark">
+                                    <i class="bi bi-box-arrow-up-right me-1"></i> Official Issue Tracker
+                                </a>
+                                {% elif doc_data.contributing_url %}
+                                <a href="{{ doc_data.contributing_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark">
+                                    <i class="bi bi-book me-1"></i> Issue Guidelines (CONTRIBUTING)
+                                </a>
+                                {% else %}
+                                <span class="btn btn-outline-secondary disabled" title="GitHub Issues are disabled for this repository">
+                                    <i class="bi bi-slash-circle me-1"></i> Issues Disabled
+                                </span>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <div class="col-md-5">
+                            <div class="p-3 bg-light rounded border">
+                                <h6 class="fw-bold mb-2 small text-uppercase text-secondary">Verified Document Links</h6>
+                                <ul class="list-unstyled mb-0 small vstack gap-2">
+                                    <li>
+                                        <i class="bi bi-file-text text-primary me-2"></i>
+                                        <a href="{{ repo_data.url }}#readme" target="_blank" rel="noopener noreferrer" class="text-decoration-none">README File</a>
+                                    </li>
+                                    <li>
+                                        <i class="bi bi-book text-success me-2"></i>
+                                        {% if doc_data.contributing_url %}
+                                        <a href="{{ doc_data.contributing_url }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none">Contributing Guide</a>
+                                        {% else %}
+                                        <span class="text-muted">Contributing Guide (Not found)</span>
+                                        {% endif %}
+                                    </li>
+                                    <li>
+                                        <i class="bi bi-heart text-danger me-2"></i>
+                                        {% if doc_data.code_of_conduct_url %}
+                                        <a href="{{ doc_data.code_of_conduct_url }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none">Code of Conduct</a>
+                                        {% else %}
+                                        <span class="text-muted">Code of Conduct (Not found)</span>
+                                        {% endif %}
+                                    </li>
+                                    <li>
+                                        <i class="bi bi-shield-check text-info me-2"></i>
+                                        {% if doc_data.security_url %}
+                                        <a href="{{ doc_data.security_url }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none">Security Policy</a>
+                                        {% else %}
+                                        <span class="text-muted">Security Policy (Not found)</span>
+                                        {% endif %}
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <!-- Empty State / Welcome Guide -->
+        <div class="row justify-content-center mb-5">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0 p-5 bg-white text-center">
+                    <div class="mb-4">
+                        <i class="bi bi-mortarboard display-3 text-success"></i>
+                    </div>
+                    <h3 class="fw-bold mb-3">Welcome to OSS Mentor</h3>
+                    <p class="text-secondary fs-5 mx-auto mb-4" style="max-width: 650px;">
+                        New to open source? Enter any GitHub repository above to generate a personalized 10-step onboarding path, verify community guidelines, and track your progress toward your first merged pull request.
+                    </p>
+
+                    <div class="row g-4 text-start justify-content-center mt-2">
+                        <div class="col-md-4">
+                            <div class="p-3 bg-light rounded border h-100">
+                                <h6 class="fw-bold text-primary"><i class="bi bi-shield-check me-2"></i>1. Verified Standards</h6>
+                                <p class="text-muted small mb-0">We inspect community standards including README, CONTRIBUTING, Code of Conduct, and License so you know what to expect.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 bg-light rounded border h-100">
+                                <h6 class="fw-bold text-success"><i class="bi bi-list-check me-2"></i>2. 10-Step Checklist</h6>
+                                <p class="text-muted small mb-0">Get clear, structured guidance tailored to the project from environment setup to creating clean commits and opening PRs.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 bg-light rounded border h-100">
+                                <h6 class="fw-bold text-info"><i class="bi bi-lock me-2"></i>3. Safe Session Tracking</h6>
+                                <p class="text-muted small mb-0">Check off your progress step by step. Your checklist is safely stored and isolated in PostgreSQL without needing an account.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center text-muted py-4 border-top mt-5 bg-white">
+        <div class="container small">
+            RepoPilot &copy; 2026 — Open Source Contribution & Repository Analysis Platform
+        </div>
+    </footer>
+
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
