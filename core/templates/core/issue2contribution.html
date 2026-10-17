@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RepoPilot - Issue2Contribution</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            color: #212529;
+        }
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .plan-card {
+            background: #ffffff;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            transition: transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+        }
+        .plan-card:hover {
+            box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.05);
+        }
+        .plan-step-num {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            font-weight: 700;
+        }
+        .code-pill {
+            font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.85rem;
+        }
+        .example-chip {
+            cursor: pointer;
+            text-decoration: none;
+            transition: background-color 0.15s ease-in-out;
+        }
+        .example-chip:hover {
+            background-color: #e2e6ea !important;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="/">
+                <i class="bi bi-compass me-2 text-primary"></i> RepoPilot
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/">
+                            <i class="bi bi-search me-1"></i> Repository Analysis
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/navigator/">
+                            <i class="bi bi-compass me-1"></i> OSS Navigator
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-semibold" href="/mentor/">
+                            <i class="bi bi-mortarboard me-1"></i> OSS Mentor
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active fw-semibold" aria-current="page" href="/issue/">
+                            <i class="bi bi-lightbulb me-1"></i> Issue2Contribution
+                        </a>
+                    </li>
+                </ul>
+                <span class="navbar-text text-light-50 small">
+                    Open Source Contribution Platform
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="container my-5">
+
+        <!-- Page Header -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10 text-center">
+                <h1 class="display-6 fw-bold mb-2">
+                    <i class="bi bi-lightbulb-fill text-warning me-2"></i>Issue2Contribution
+                </h1>
+                <p class="text-secondary fs-5 mb-0">
+                    Transform open-source GitHub issues into practical, evidence-grounded contribution plans. Understand requirements, discover cited code files, and prepare your pull request with confidence.
+                </p>
+            </div>
+        </div>
+
+        <!-- Issue Input Form Card -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0 p-4 bg-white">
+                    <form method="POST" action="{% url 'issue2contribution' %}" id="issueForm">
+                        {% csrf_token %}
+                        <label for="issue_url" class="form-label fw-bold">Enter a Public GitHub Issue URL or Shorthand</label>
+                        <div class="input-group mb-2">
+                            <span class="input-group-text bg-light"><i class="bi bi-github"></i></span>
+                            <input type="text"
+                                   class="form-control form-control-lg fs-6"
+                                   id="issue_url"
+                                   name="issue_url"
+                                   value="{{ issue_url }}"
+                                   placeholder="https://github.com/owner/repository/issues/123 or owner/repo#123"
+                                   required
+                                   autofocus>
+                            <button class="btn btn-primary px-4 fw-semibold" type="submit">
+                                <i class="bi bi-search me-1"></i> Analyze Issue
+                            </button>
+                        </div>
+                    </form>
+
+                    <!-- Example Hints -->
+                    <div class="d-flex align-items-center flex-wrap gap-2 pt-2 border-top">
+                        <span class="text-muted small fw-semibold">Supported formats:</span>
+                        <span class="badge bg-light text-dark border code-pill">https://github.com/django/django/issues/12345</span>
+                        <span class="badge bg-light text-dark border code-pill">pallets/flask#5000</span>
+                        <span class="badge bg-light text-dark border code-pill">psf/black#42</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alert: Validation & Service Errors -->
+        {% if error_message and not is_pull_request %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="alert alert-danger shadow-sm d-flex align-items-center" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill flex-shrink-0 me-3 fs-4"></i>
+                    <div>
+                        <strong>Notice:</strong> {{ error_message }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Alert: Pull Request Notice -->
+        {% if is_pull_request %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+                <div class="alert alert-info shadow-sm d-flex align-items-center" role="alert">
+                    <i class="bi bi-info-circle-fill flex-shrink-0 me-3 fs-4 text-info"></i>
+                    <div>
+                        <h5 class="alert-heading fw-bold mb-1">Pull Request Detected</h5>
+                        <p class="mb-0">
+                            {{ error_message|default:"The referenced item is a Pull Request, not an issue. Issue2Contribution generates contribution plans for GitHub Issues only." }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Analyzed Issue & Contribution Plan Section -->
+        {% if issue and not is_pull_request %}
+        <div class="row justify-content-center mb-4">
+            <div class="col-lg-10">
+
+                <!-- Issue Overview Card -->
+                <div class="card shadow-sm border-0 mb-4">
+                    <div class="card-header bg-white border-bottom py-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                        <div class="d-flex align-items-center flex-wrap gap-2">
+                            <span class="badge bg-secondary">{{ issue.owner }}</span>
+                            <span class="fw-bold fs-5 text-dark">{{ issue.name }}</span>
+                            <a href="{{ issue.html_url }}" target="_blank" rel="noopener noreferrer" class="badge bg-light text-dark border text-decoration-none">
+                                #{{ issue.issue_number }} <i class="bi bi-box-arrow-up-right small"></i>
+                            </a>
+                        </div>
+                        <div class="d-flex align-items-center flex-wrap gap-2">
+                            {% if issue.state == "open" %}
+                            <span class="badge bg-success"><i class="bi bi-record-circle me-1"></i> Open</span>
+                            {% else %}
+                            <span class="badge bg-secondary"><i class="bi bi-check-circle-fill me-1"></i> Closed</span>
+                            {% endif %}
+
+                            {% if plan %}
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle">
+                                {{ plan.objective.category }}
+                            </span>
+                            {% endif %}
+
+                            {% if plan.objective.is_good_first_issue %}
+                            <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                <i class="bi bi-star-fill me-1"></i> Good First Issue
+                            </span>
+                            {% endif %}
+
+                            {% if repo_context and repo_context.readiness_score is not None %}
+                            <a href="/mentor/?repo={{ repo_context.owner }}/{{ repo_context.name }}" class="badge bg-info-subtle text-info-emphasis border border-info-subtle text-decoration-none" title="View in OSS Mentor">
+                                <i class="bi bi-speedometer2 me-1"></i> Repo Readiness: {{ repo_context.readiness_score|floatformat:0 }}/100
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="card-body p-4">
+                        <h2 class="h4 fw-bold mb-3">{{ issue.title }}</h2>
+
+                        <!-- Metadata Row -->
+                        <div class="d-flex align-items-center flex-wrap gap-3 text-secondary small mb-3">
+                            <div class="d-flex align-items-center">
+                                {% if issue.author_avatar %}
+                                <img src="{{ issue.author_avatar }}" alt="{{ issue.author }}" class="rounded-circle me-1" width="20" height="20">
+                                {% else %}
+                                <i class="bi bi-person-circle me-1"></i>
+                                {% endif %}
+                                <a href="{{ issue.author_url }}" target="_blank" rel="noopener noreferrer" class="text-secondary text-decoration-none fw-semibold">
+                                    {{ issue.author }}
+                                </a>
+                            </div>
+                            <div>
+                                <i class="bi bi-calendar3 me-1"></i> Created {{ issue.created_at|date:"M d, Y" }}
+                            </div>
+                            {% if issue.updated_at %}
+                            <div>
+                                <i class="bi bi-arrow-repeat me-1"></i> Updated {{ issue.updated_at|date:"M d, Y" }}
+                            </div>
+                            {% endif %}
+                            <div>
+                                <i class="bi bi-chat-text me-1"></i> {{ issue.comments_count }} comment{{ issue.comments_count|pluralize }}
+                            </div>
+                        </div>
+
+                        <!-- Labels -->
+                        {% if issue.labels %}
+                        <div class="d-flex flex-wrap gap-1 mb-3">
+                            {% for lbl in issue.labels %}
+                            <span class="badge rounded-pill border code-pill" style="background-color: #{{ lbl.color }}; color: #000;" title="{{ lbl.description }}">
+                                {{ lbl.name }}
+                            </span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        <!-- Closed Issue Warning Notice -->
+                        {% if plan.objective.closed_notice %}
+                        <div class="alert alert-warning border-warning d-flex align-items-center mt-3 mb-3">
+                            <i class="bi bi-exclamation-triangle-fill flex-shrink-0 me-2 fs-5"></i>
+                            <div>
+                                {{ plan.objective.closed_notice }}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Collapsible Full Issue Description -->
+                        {% if issue.body %}
+                        <div class="mt-3">
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#issueBody" aria-expanded="false" aria-controls="issueBody">
+                                <i class="bi bi-file-text me-1"></i> View Original Issue Report
+                            </button>
+                            <div class="collapse mt-2" id="issueBody">
+                                <div class="card card-body bg-light border code-pill small" style="white-space: pre-wrap; max-height: 320px; overflow-y: auto;">
+                                    {{ issue.body }}
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Structured 6-Part Contribution Plan -->
+                <h3 class="h4 fw-bold mb-3 d-flex align-items-center">
+                    <i class="bi bi-journal-check text-primary me-2"></i>Structured Contribution Plan
+                </h3>
+
+                <!-- Part 1: Objective & Scope -->
+                <div class="card plan-card mb-3">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-center mb-2">
+                            <span class="plan-step-num bg-primary text-white me-2">1</span>
+                            <h4 class="h5 fw-bold mb-0 text-primary">{{ plan.objective.title }}</h4>
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle ms-auto">
+                                {{ plan.objective.category }}
+                            </span>
+                        </div>
+                        <p class="fw-semibold text-dark mb-2">{{ plan.objective.summary }}</p>
+                        <p class="text-secondary mb-0">{{ plan.objective.explanation }}</p>
+                    </div>
+                </div>
+
+                <!-- Part 2: Pre-Coding Investigation -->
+                <div class="card plan-card mb-3">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-center mb-3">
+                            <span class="plan-step-num bg-info text-white me-2">2</span>
+                            <h4 class="h5 fw-bold mb-0 text-info">{{ plan.investigation.title }}</h4>
+                        </div>
+                        <ul class="list-group list-group-flush">
+                            {% for step in plan.investigation.steps %}
+                            <li class="list-group-item px-0 py-2 d-flex align-items-start border-0">
+                                <i class="bi bi-check2-circle text-info me-2 mt-1 fs-6 flex-shrink-0"></i>
+                                <span>{{ step }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Part 3: Supported File & Component Evidence -->
+                <div class="card plan-card mb-3">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-center mb-3">
+                            <span class="plan-step-num bg-success text-white me-2">3</span>
+                            <h4 class="h5 fw-bold mb-0 text-success">{{ plan.evidence.title }}</h4>
+                        </div>
+                        <p class="text-secondary mb-3">{{ plan.evidence.notice }}</p>
+
+                        <!-- Evidenced Files -->
+                        {% if plan.evidence.has_files %}
+                        <div class="mb-3">
+                            <h5 class="h6 fw-bold text-dark mb-2">
+                                <i class="bi bi-file-earmark-code me-1 text-success"></i> Cited Files & Locations
+                            </h5>
+                            <div class="list-group">
+                                {% for file in plan.evidence.files %}
+                                <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-center py-2 px-3 bg-light border">
+                                    <code class="text-dark fw-bold">{{ file }}</code>
+                                    <button type="button"
+                                            class="btn btn-sm btn-link text-secondary p-0 copy-btn"
+                                            data-copy-text="{{ file }}"
+                                            title="Copy file path"
+                                            aria-label="Copy file path: {{ file }}">
+                                        <i class="bi bi-copy"></i>
+                                    </button>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Evidenced Symbols -->
+                        {% if plan.evidence.symbols %}
+                        <div class="mb-3">
+                            <h5 class="h6 fw-bold text-dark mb-2">
+                                <i class="bi bi-code-slash me-1 text-primary"></i> Referenced Symbols & Methods
+                            </h5>
+                            <div class="d-flex flex-wrap gap-1">
+                                {% for sym in plan.evidence.symbols %}
+                                <span class="badge bg-light text-dark border code-pill py-1 px-2"><code>{{ sym }}</code></span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Evidenced Exceptions -->
+                        {% if plan.evidence.errors %}
+                        <div class="mb-2">
+                            <h5 class="h6 fw-bold text-dark mb-2">
+                                <i class="bi bi-bug me-1 text-danger"></i> Explicit Exception Signatures
+                            </h5>
+                            {% for err in plan.evidence.errors %}
+                            <div class="p-2 mb-1 bg-danger-subtle text-danger-emphasis rounded border border-danger-subtle code-pill small">
+                                {{ err }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        <!-- Component Labels -->
+                        {% if plan.evidence.component_labels %}
+                        <div class="mt-2">
+                            <h5 class="h6 fw-bold text-dark mb-1">
+                                <i class="bi bi-tag me-1 text-info"></i> Target Component / Area
+                            </h5>
+                            {% for comp in plan.evidence.component_labels %}
+                            <span class="badge bg-info-subtle text-info border border-info-subtle me-1">{{ comp }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Part 4: Suggested Implementation Path -->
+                <div class="card plan-card mb-3">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-center mb-3">
+                            <span class="plan-step-num bg-warning text-dark me-2">4</span>
+                            <h4 class="h5 fw-bold mb-0 text-dark">{{ plan.implementation.title }}</h4>
+                        </div>
+                        <ol class="list-group list-group-numbered list-group-flush mb-3">
+                            {% for milestone in plan.implementation.milestones %}
+                            <li class="list-group-item px-0 py-2 border-0 d-flex align-items-start">
+                                <span class="me-2 text-warning fw-bold">{{ forloop.counter }}.</span>
+                                <span>{{ milestone }}</span>
+                            </li>
+                            {% endfor %}
+                        </ol>
+                        {% if plan.implementation.disclaimer %}
+                        <div class="alert alert-light border small text-muted mb-0">
+                            <i class="bi bi-shield-exclamation me-1 text-warning"></i>
+                            <strong>Guidance:</strong> {{ plan.implementation.disclaimer }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Part 5: Testing & Verification Guidance -->
+                <div class="card plan-card mb-3">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-center mb-3">
+                            <span class="plan-step-num bg-primary text-white me-2">5</span>
+                            <h4 class="h5 fw-bold mb-0 text-primary">{{ plan.testing.title }}</h4>
+                        </div>
+                        <ul class="list-group list-group-flush">
+                            {% for step in plan.testing.steps %}
+                            <li class="list-group-item px-0 py-2 d-flex align-items-start border-0">
+                                <i class="bi bi-check2-square text-primary me-2 mt-1 fs-6 flex-shrink-0"></i>
+                                <span>{{ step }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Part 6: Pull Request Preparation -->
+                <div class="card plan-card mb-3">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-center mb-3">
+                            <span class="plan-step-num bg-dark text-white me-2">6</span>
+                            <h4 class="h5 fw-bold mb-0 text-dark">{{ plan.pull_request.title }}</h4>
+                        </div>
+
+                        <!-- Closing Syntax Callout Box -->
+                        <div class="p-3 bg-light rounded border mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                            <div>
+                                <span class="text-muted small d-block">Recommended GitHub Closing Syntax:</span>
+                                <code class="fs-5 text-success fw-bold">{{ plan.pull_request.closing_keyword }}</code>
+                            </div>
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary copy-btn"
+                                    data-copy-text="{{ plan.pull_request.closing_keyword }}"
+                                    aria-label="Copy closing syntax: {{ plan.pull_request.closing_keyword }}">
+                                <i class="bi bi-clipboard me-1"></i> <span class="copy-btn-label">Copy Syntax</span>
+                            </button>
+                        </div>
+
+                        <ul class="list-group list-group-flush">
+                            {% for guideline in plan.pull_request.guidelines %}
+                            <li class="list-group-item px-0 py-2 d-flex align-items-start border-0">
+                                <i class="bi bi-arrow-right-short text-dark me-2 mt-1 fs-5 flex-shrink-0"></i>
+                                <span>{{ guideline }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Empty State / Introduction (When no issue has been analyzed yet) -->
+        {% if not issue and not error_message and not is_pull_request %}
+        <div class="row justify-content-center">
+            <div class="col-lg-10">
+                <div class="card shadow-sm border-0 p-5 bg-white text-center">
+                    <div class="mb-4">
+                        <i class="bi bi-file-earmark-code text-primary" style="font-size: 3.5rem;"></i>
+                    </div>
+                    <h2 class="h3 fw-bold mb-3">How Issue2Contribution Works</h2>
+                    <p class="text-secondary lead fs-6 mb-5 mx-auto" style="max-width: 680px;">
+                        RepoPilot inspects open GitHub issues using evidence-grounded rules. We extract referenced code paths, stack traces, and symbol names without guessing or hallucinating details.
+                    </p>
+
+                    <div class="row g-4 text-start">
+                        <div class="col-md-4">
+                            <div class="p-3 bg-light rounded border h-100">
+                                <div class="text-primary fs-3 mb-2"><i class="bi bi-shield-check"></i></div>
+                                <h3 class="h5 fw-bold mb-2">Evidence-Grounded</h3>
+                                <p class="text-secondary small mb-0">
+                                    Only citations directly present in the issue description or stack traces are reported. If no files are mentioned, we explicitly instruct you not to guess.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 bg-light rounded border h-100">
+                                <div class="text-success fs-3 mb-2"><i class="bi bi-list-check"></i></div>
+                                <h3 class="h5 fw-bold mb-2">6-Part Action Plan</h3>
+                                <p class="text-secondary small mb-0">
+                                    Structured milestones cover pre-coding investigation, implementation boundaries, regression test planning, and conventional commit preparation.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 bg-light rounded border h-100">
+                                <div class="text-info fs-3 mb-2"><i class="bi bi-mortarboard"></i></div>
+                                <h3 class="h5 fw-bold mb-2">Beginner-Friendly</h3>
+                                <p class="text-secondary small mb-0">
+                                    Tailored guidance highlights whether maintainers tagged the issue as newcomer-friendly, explains issue scope, and formats GitHub closing keywords.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-top py-4 mt-5">
+        <div class="container text-center text-muted small">
+            <p class="mb-1">&copy; RepoPilot — Open Source Contribution Platform</p>
+            <p class="mb-0">Deterministic, rule-based issue analysis and contributor onboarding.</p>
+        </div>
+    </footer>
+
+    <!-- Bootstrap 5 Bundle JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Safe Copy to Clipboard Event Handling -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var copyButtons = document.querySelectorAll('.copy-btn');
+            copyButtons.forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var textToCopy = this.getAttribute('data-copy-text');
+                    if (!textToCopy) return;
+
+                    var btn = this;
+                    var labelEl = btn.querySelector('.copy-btn-label');
+                    var iconEl = btn.querySelector('i');
+                    var originalLabel = labelEl ? labelEl.textContent : '';
+                    var originalTitle = btn.getAttribute('title') || '';
+                    var originalIconClass = iconEl ? iconEl.className : '';
+
+                    function applyFeedback(message, isError) {
+                        if (labelEl) {
+                            labelEl.textContent = message;
+                        }
+                        btn.setAttribute('title', message);
+                        if (iconEl && !labelEl) {
+                            iconEl.className = isError ? 'bi bi-x-circle text-danger' : 'bi bi-check2 text-success';
+                        }
+                        setTimeout(function () {
+                            if (labelEl) {
+                                labelEl.textContent = originalLabel;
+                            }
+                            if (originalTitle) {
+                                btn.setAttribute('title', originalTitle);
+                            } else {
+                                btn.removeAttribute('title');
+                            }
+                            if (iconEl && !labelEl) {
+                                iconEl.className = originalIconClass;
+                            }
+                        }, 2000);
+                    }
+
+                    if (navigator.clipboard && window.isSecureContext && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(textToCopy).then(function () {
+                            applyFeedback('Copied!', false);
+                        }).catch(function () {
+                            fallbackCopy(textToCopy, applyFeedback);
+                        });
+                    } else {
+                        fallbackCopy(textToCopy, applyFeedback);
+                    }
+                });
+            });
+
+            function fallbackCopy(text, callback) {
+                try {
+                    var textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    textarea.setAttribute('readonly', '');
+                    textarea.style.position = 'absolute';
+                    textarea.style.left = '-9999px';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    var success = document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    if (success) {
+                        callback('Copied!', false);
+                    } else {
+                        callback('Copy failed', true);
+                    }
+                } catch (e) {
+                    callback('Copy failed', true);
+                }
+            }
+        });
+    </script>
+</body>
+</html>

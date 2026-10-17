@@ -21,6 +21,16 @@ from .github_service import (
     RateLimitError,
     NetworkError,
     AuthenticationError,
+    GitHubServiceError,
+)
+from .issue_service import (
+    parse_github_issue_url,
+    fetch_github_issue,
+    extract_issue_evidence,
+    generate_contribution_plan,
+    analyze_issue_and_generate_plan,
+    IssueNotFoundError,
+    PullRequestNotSupportedError,
 )
 
 
@@ -2300,3 +2310,914 @@ class GlobalIssueCountAccuracyTests(TestCase):
         self.assertEqual(resp_mentor.status_code, 200)
         self.assertContains(resp_mentor, "Open Issues (Unavailable)")
         self.assertContains(resp_mentor, "Issue Count Notice")
+
+
+class IssueServiceTests(TestCase):
+    """
+    Unit and integration tests for Issue2Contribution service (core/issue_service.py).
+    All GitHub API requests are mocked; zero network calls are made.
+    """
+
+    def test_parse_valid_issue_urls(self):
+        cases = [
+            ("https://github.com/django/django/issues/12345", ("django", "django", 12345)),
+            ("http://github.com/django/django/issues/12345/", ("django", "django", 12345)),
+            ("github.com/pallets/flask/issues/5000", ("pallets", "flask", 5000)),
+            ("https://github.com/psf/black/issues/42#issuecomment-9999", ("psf", "black", 42)),
+            ("https://www.github.com/facebook/react/issues/100", ("facebook", "react", 100)),
+            ("pallets/flask#5000", ("pallets", "flask", 5000)),
+            ("django/django#1", ("django", "django", 1)),
+        ]
+        for url_str, expected in cases:
+            with self.subTest(url=url_str):
+                self.assertEqual(parse_github_issue_url(url_str), expected)
+
+    def test_parse_invalid_issue_urls(self):
+        invalid_cases = [
+            "",
+            "   ",
+            None,
+            "https://gitlab.com/django/django/issues/1",
+            "https://github.com/django/django",  # missing issue number
+            "https://github.com/django/django/issues",  # missing number
+            "https://github.com/django/django/issues/abc",  # non-numeric
+            "https://github.com/django/django/issues/-5",  # negative
+            "https://github.com/django/django/issues/0",  # zero
+            "django/django#0",  # zero shorthand
+            "django/django#-10",  # negative shorthand
+            "invalid$owner/django#1",  # invalid chars
+        ]
+        for case in invalid_cases:
+            with self.subTest(case=case):
+                with self.assertRaises(InvalidURLError):
+                    parse_github_issue_url(case)
+
+    def test_parse_pull_request_url_raises_pr_error(self):
+        pr_urls = [
+            "https://github.com/django/django/pull/12345",
+            "http://github.com/pallets/flask/pulls/100",
+            "github.com/facebook/react/pull/500",
+        ]
+        for pr_url in pr_urls:
+            with self.subTest(url=pr_url):
+                with self.assertRaises(PullRequestNotSupportedError) as cm:
+                    parse_github_issue_url(pr_url)
+                self.assertIn("Pull Request", str(cm.exception))
+
+    @patch("core.issue_service._make_github_request")
+    def test_fetch_github_issue_success(self, mock_request):
+        mock_request.return_value = {
+            "title": "Fix crash in URL resolver when reverse matching",
+            "body": "When reversing URLs with invalid args, an unhandled exception is thrown.\nSee `django/urls/resolvers.py` line 45.",
+            "state": "open",
+            "html_url": "https://github.com/django/django/issues/12345",
+            "user": {"login": "contributor1", "avatar_url": "https://avatars.githubusercontent.com/u/1"},
+            "labels": [
+                {"name": "bug", "color": "d73a4a", "description": "Something isn't working"},
+                {"name": "good first issue", "color": "7057ff", "description": "Good for newcomers"},
+            ],
+            "comments": 4,
+            "created_at": "2026-10-10T12:00:00Z",
+            "updated_at": "2026-10-11T15:30:00Z",
+            "closed_at": None,
+        }
+
+        issue = fetch_github_issue("django", "django", 12345)
+        self.assertEqual(issue["owner"], "django")
+        self.assertEqual(issue["name"], "django")
+        self.assertEqual(issue["issue_number"], 12345)
+        self.assertEqual(issue["title"], "Fix crash in URL resolver when reverse matching")
+        self.assertEqual(issue["state"], "open")
+        self.assertEqual(issue["author"], "contributor1")
+        self.assertEqual(issue["comments_count"], 4)
+        self.assertEqual(len(issue["labels"]), 2)
+        self.assertFalse(issue["is_pull_request"])
+        mock_request.assert_called_once_with("https://api.github.com/repos/django/django/issues/12345")
+
+    @patch("core.issue_service._make_github_request")
+    def test_fetch_github_issue_detects_pull_request_payload(self, mock_request):
+        mock_request.return_value = {
+            "title": "PR: Refactor auth middleware",
+            "body": "This PR refactors middleware.",
+            "state": "open",
+            "pull_request": {"url": "https://api.github.com/repos/django/django/pulls/500"},
+            "user": {"login": "pr_author"},
+            "labels": [],
+            "comments": 1,
+        }
+
+        issue = fetch_github_issue("django", "django", 500)
+        self.assertTrue(issue["is_pull_request"])
+
+    @patch("core.issue_service._make_github_request")
+    def test_fetch_github_issue_not_found(self, mock_request):
+        mock_request.return_value = None
+        with self.assertRaises(IssueNotFoundError):
+            fetch_github_issue("django", "django", 999999)
+
+    @patch("core.issue_service._make_github_request")
+    def test_fetch_github_issue_rate_limit_and_network_errors(self, mock_request):
+        mock_request.side_effect = RateLimitError("Rate limit exceeded")
+        with self.assertRaises(RateLimitError):
+            fetch_github_issue("django", "django", 10)
+
+        mock_request.side_effect = NetworkError("Connection timed out")
+        with self.assertRaises(NetworkError):
+            fetch_github_issue("django", "django", 10)
+
+    def test_extract_issue_evidence_explicit_files_and_symbols(self):
+        title = "TypeError when calling resolve_model in models.py"
+        body = """
+        I encountered this error when running migrations:
+        ```python
+        File "django/db/models/base.py", line 420, in resolve_model
+            return getattr(cls, name)
+        ```
+        Also see `django/core/checks/model_checks.py`.
+        Calling `ModelBase.__new__()` triggers `TypeError: NoneType is not callable`.
+        """
+        labels = [{"name": "bug"}, {"name": "component:ORM"}]
+
+        evidence = extract_issue_evidence(title, body, labels)
+        self.assertTrue(evidence["has_files"])
+        self.assertIn("django/db/models/base.py", evidence["files"])
+        self.assertIn("django/core/checks/model_checks.py", evidence["files"])
+        self.assertIn("models.py", evidence["files"])
+        self.assertTrue(evidence["is_bug"])
+        self.assertFalse(evidence["is_doc"])
+        self.assertTrue(len(evidence["errors"]) > 0)
+        self.assertTrue(len(evidence["symbols"]) > 0)
+
+    def test_extract_issue_evidence_zero_files_never_hallucinates(self):
+        title = "Improve documentation for beginners"
+        body = "The tutorial needs clearer steps for Windows setup."
+        labels = [{"name": "documentation"}, {"name": "good first issue"}]
+
+        evidence = extract_issue_evidence(title, body, labels)
+        self.assertFalse(evidence["has_files"])
+        self.assertEqual(evidence["files"], [])
+        self.assertTrue(evidence["is_doc"])
+        self.assertTrue(evidence["is_good_first_issue"])
+        self.assertFalse(evidence["is_bug"])
+
+    def test_generate_contribution_plan_structure(self):
+        issue_data = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 5000,
+            "title": "Bug in blueprint url_prefix handling",
+            "body": "Stack trace:\nFile \"src/flask/blueprints.py\", line 110, in register\nTypeError: url_prefix must be str",
+            "state": "open",
+            "labels": [{"name": "bug"}, {"name": "good first issue"}],
+        }
+
+        plan = generate_contribution_plan(issue_data)
+        # Verify 6 parts
+        self.assertIn("objective", plan)
+        self.assertIn("investigation", plan)
+        self.assertIn("evidence", plan)
+        self.assertIn("implementation", plan)
+        self.assertIn("testing", plan)
+        self.assertIn("pull_request", plan)
+
+        # Check part contents
+        self.assertEqual(plan["objective"]["category"], "Bug Fix")
+        self.assertTrue(plan["objective"]["is_good_first_issue"])
+        self.assertTrue(plan["evidence"]["has_files"])
+        self.assertIn("src/flask/blueprints.py", plan["evidence"]["files"])
+        self.assertEqual(plan["pull_request"]["closing_keyword"], "Fixes #5000")
+
+    def test_generate_contribution_plan_zero_evidence_notice(self):
+        issue_data = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 5001,
+            "title": "Navbar dropdown glitch on Safari",
+            "body": "Clicking the profile icon does nothing on mobile Safari.",
+            "state": "open",
+            "labels": [{"name": "bug"}],
+        }
+
+        plan = generate_contribution_plan(issue_data)
+        self.assertFalse(plan["evidence"]["has_files"])
+        self.assertIn("No specific file paths or source files were cited", plan["evidence"]["notice"])
+
+    @patch("core.issue_service.fetch_github_issue")
+    def test_analyze_issue_and_generate_plan_orchestrator(self, mock_fetch):
+        mock_fetch.return_value = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 42,
+            "title": "Doc update",
+            "body": "Fix typo in `quickstart.rst`.",
+            "state": "open",
+            "labels": [{"name": "documentation"}],
+            "is_pull_request": False,
+        }
+
+        res = analyze_issue_and_generate_plan("pallets/flask#42")
+        self.assertEqual(res["owner"], "pallets")
+        self.assertEqual(res["name"], "flask")
+        self.assertEqual(res["issue_number"], 42)
+        self.assertIsNotNone(res["plan"])
+        self.assertEqual(res["plan"]["objective"]["category"], "Documentation Improvement")
+
+    @patch("core.issue_service.fetch_github_issue")
+    def test_analyze_issue_and_generate_plan_pr_returns_none_plan(self, mock_fetch):
+        mock_fetch.return_value = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 99,
+            "title": "PR: Refactor core",
+            "body": "PR description",
+            "state": "open",
+            "labels": [],
+            "is_pull_request": True,
+        }
+
+        res = analyze_issue_and_generate_plan("pallets/flask#99")
+        self.assertTrue(res["issue"]["is_pull_request"])
+        self.assertIsNone(res["plan"])
+
+    def test_parse_unsupported_url_schemes_rejected(self):
+        unsupported_schemes = [
+            "ftp://github.com/django/django/issues/123",
+            "ssh://github.com/django/django/issues/123",
+            "git://github.com/django/django/issues/123",
+            "file:///github.com/django/django/issues/123",
+        ]
+        for url in unsupported_schemes:
+            with self.subTest(url=url):
+                with self.assertRaises(InvalidURLError) as cm:
+                    parse_github_issue_url(url)
+                self.assertIn("scheme", str(cm.exception).lower())
+
+    def test_extract_evidence_javascript_node_stack_trace(self):
+        title = "Uncaught TypeError in production bundle"
+        body = """
+        Error occurred during initialization:
+        TypeError: Cannot read properties of undefined (reading 'mount')
+            at Object.<anonymous> (/app/src/components/App.tsx:42:15)
+            at initRouter (src/router/index.ts:108:5)
+        """
+        evidence = extract_issue_evidence(title, body, [])
+        self.assertIn("/app/src/components/App.tsx", evidence["files"])
+        self.assertIn("src/router/index.ts", evidence["files"])
+        self.assertTrue(len(evidence["errors"]) > 0)
+        self.assertIn("TypeError", evidence["errors"][0])
+
+    def test_extract_evidence_unified_diff_headers(self):
+        title = "Proposed patch for logger"
+        body = """
+        Here is the diff:
+        --- a/src/logger/old.py
+        +++ b/src/logger/handler.py
+        @@ -10,3 +10,4 @@
+        """
+        evidence = extract_issue_evidence(title, body, [])
+        self.assertIn("src/logger/handler.py", evidence["files"])
+        self.assertIn("src/logger/old.py", evidence["files"])
+        self.assertNotIn("b/src/logger/handler.py", evidence["files"])
+
+    def test_extract_evidence_windows_style_paths(self):
+        title = "Crash on Windows"
+        body = r"Exception thrown in src\flask\blueprints.py line 45 and config\settings.py."
+        evidence = extract_issue_evidence(title, body, [])
+        self.assertIn("src/flask/blueprints.py", evidence["files"])
+        self.assertIn("config/settings.py", evidence["files"])
+
+    def test_extract_evidence_filters_attachments_including_png(self):
+        title = "UI bug with screenshots"
+        body = """
+        See attached screenshot: `diagram.png` and `flowchart.jpg`.
+        Also uploaded archive.zip and document.pdf.
+        Actual bug in `views.py`.
+        """
+        evidence = extract_issue_evidence(title, body, [])
+        self.assertIn("views.py", evidence["files"])
+        self.assertNotIn("diagram.png", evidence["files"])
+        self.assertNotIn("flowchart.jpg", evidence["files"])
+        self.assertNotIn("archive.zip", evidence["files"])
+        self.assertNotIn("document.pdf", evidence["files"])
+
+    def test_extract_evidence_filters_version_numbers_including_v_prefix(self):
+        title = "Bug occurs on Python 3.10.4 and release v2.4.1"
+        body = "Observed when upgrading from 1.0.0 to v2.4.1 on Django 4.2.1. File `models.py` fails."
+        evidence = extract_issue_evidence(title, body, [])
+        self.assertIn("models.py", evidence["files"])
+        for item in ("3.10.4", "v2.4.1", "1.0.0", "4.2.1"):
+            self.assertNotIn(item, evidence["files"])
+
+    def test_extract_evidence_bare_filename_with_sentence_punctuation(self):
+        text_cases = [
+            "The error is in models.py.",
+            "Please check models.py!",
+            "Could this be in models.py?",
+            "Found in models.py, views.py, and urls.py.",
+            'Located in "models.py".',
+            "Located in (models.py).",
+            "Look at models.py: line 42",
+        ]
+        for text in text_cases:
+            with self.subTest(text=text):
+                evidence = extract_issue_evidence("Issue title", text, [])
+                self.assertIn("models.py", evidence["files"])
+                for f in evidence["files"]:
+                    self.assertFalse(f.endswith("."))
+                    self.assertFalse(f.endswith("!"))
+                    self.assertFalse(f.endswith("?"))
+                    self.assertFalse(f.endswith(","))
+                    self.assertFalse(f.endswith(":"))
+
+    @patch("core.issue_service._make_github_request")
+    def test_fetch_github_issue_non_dict_response_raises_service_error(self, mock_request):
+        mock_request.return_value = ["unexpected", "list", "response"]
+        with self.assertRaises(GitHubServiceError) as cm:
+            fetch_github_issue("django", "django", 123)
+        self.assertIn("Unexpected response format", str(cm.exception))
+
+    @patch("core.issue_service._make_github_request")
+    def test_fetch_and_plan_closed_issue_metadata_and_notice(self, mock_request):
+        mock_request.return_value = {
+            "title": "Old bug resolved or rejected",
+            "body": "Fixed in earlier version.",
+            "state": "closed",
+            "closed_at": "2026-09-01T12:00:00Z",
+            "state_reason": "completed",
+            "html_url": "https://github.com/django/django/issues/999",
+            "user": {"login": "reporter"},
+            "labels": [{"name": "bug"}],
+            "comments": 2,
+        }
+        issue = fetch_github_issue("django", "django", 999)
+        self.assertEqual(issue["state"], "closed")
+        self.assertIsNotNone(issue["closed_at"])
+        self.assertEqual(issue["state_reason"], "completed")
+
+        plan = generate_contribution_plan(issue)
+        self.assertEqual(plan["objective"]["state"], "closed")
+        self.assertTrue(plan["objective"]["is_closed"])
+        self.assertIsNotNone(plan["objective"]["closed_notice"])
+        self.assertIn("CLOSED", plan["objective"]["closed_notice"])
+        self.assertIn("check the issue comments and linked pull requests", plan["objective"]["closed_notice"].lower())
+        # Ensure we do not assume every closed issue was resolved
+        self.assertIn("duplicate", plan["objective"]["closed_notice"].lower())
+        self.assertIn("Caution: This issue is closed", plan["implementation"]["disclaimer"])
+        self.assertTrue(any("Verify Closed Status" in step for step in plan["investigation"]["steps"]))
+
+    def test_django_guardian_1025_feature_regression(self):
+        """
+        Regression test for real-world issue #1025 on django-guardian/django-guardian:
+        Title: 'Add an opt-in setting to let global permissions carry over to object checks'
+        Labels: ['enhancement', 'documentation', 'more info required']
+        Body: Feature request template describing opt-in setting.
+        Must be categorized as Feature Request / Enhancement (NOT Documentation Improvement),
+        must not recommend documentation-only implementation steps, and must handle zero-evidence safely.
+        """
+        issue_data = {
+            "owner": "django-guardian",
+            "name": "django-guardian",
+            "issue_number": 1025,
+            "title": "Add an opt-in setting to let global permissions carry over to object checks",
+            "labels": [{"name": "enhancement"}, {"name": "documentation"}, {"name": "more info required"}],
+            "body": (
+                "**Is your feature request related to a problem? Please describe.**\n"
+                "`has_perm(user, perm, obj)` currently treats global and object permissions as separate concepts, "
+                "which makes it difficult to opt into a model where a global permission should also satisfy object-level checks."
+            ),
+            "state": "open",
+        }
+
+        plan = generate_contribution_plan(issue_data)
+
+        # 1. Category must be Feature Request / Enhancement
+        self.assertEqual(plan["objective"]["category"], "Feature Request / Enhancement")
+
+        # 2. Evidence must not fabricate files
+        self.assertFalse(plan["evidence"]["has_files"])
+        self.assertEqual(plan["evidence"]["files"], [])
+
+        # 3. Implementation must be feature-oriented, NOT documentation-only
+        milestones = plan["implementation"]["milestones"]
+        self.assertTrue(any("feature-issue-1025" in m for m in milestones))
+        self.assertTrue(any("Search repository before editing" in m for m in milestones))
+        self.assertTrue(any("Implement the requested functionality" in m for m in milestones))
+        self.assertTrue(any("Update relevant documentation" in m for m in milestones))
+        # Ensure it does not have documentation-only steps
+        self.assertFalse(any("Apply precise documentation edits" in m for m in milestones))
+        self.assertFalse(any("fixing grammar, terminology" in m for m in milestones))
+
+        # 4. Investigation must recommend repository keyword search and inspection of tests
+        investigation = plan["investigation"]["steps"]
+        self.assertTrue(any("Repository Keyword Search" in step for step in investigation))
+        self.assertTrue(any("Inspect Related Test Files" in step for step in investigation))
+        self.assertTrue(any("Confirm Feature Alignment" in step for step in investigation))
+
+        # 5. Testing must recommend searching existing test directories
+        testing = plan["testing"]["steps"]
+        self.assertTrue(any("Search existing test directories" in step for step in testing))
+
+        # 6. PR guidelines must use feat prefix
+        self.assertTrue(any("feat(django-guardian)" in g for g in plan["pull_request"]["guidelines"]))
+
+    def test_classification_bug_fix_with_evidence(self):
+        issue_data = {
+            "owner": "encode",
+            "name": "starlette",
+            "issue_number": 123,
+            "title": "Crash when passing None to json_encoder",
+            "labels": [{"name": "bug"}],
+            "body": "File \"src/encoder.py\", line 45\nTypeError: expected str, got None",
+            "state": "open",
+        }
+        plan = generate_contribution_plan(issue_data)
+        self.assertEqual(plan["objective"]["category"], "Bug Fix")
+        self.assertTrue(plan["evidence"]["has_files"])
+        self.assertIn("src/encoder.py", plan["evidence"]["files"])
+        self.assertTrue(any("fix-issue-123" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("src/encoder.py" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("minimal, targeted patch" in m for m in plan["implementation"]["milestones"]))
+
+    def test_classification_documentation_improvement(self):
+        issue_data = {
+            "owner": "django",
+            "name": "django",
+            "issue_number": 888,
+            "title": "Fix typo in tutorial documentation",
+            "labels": [{"name": "documentation"}],
+            "body": "The tutorial has a typo in section 2.",
+            "state": "open",
+        }
+        plan = generate_contribution_plan(issue_data)
+        self.assertEqual(plan["objective"]["category"], "Documentation Improvement")
+        self.assertTrue(any("docs-issue-888" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("precise documentation edits" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("Verify Documentation Build" in s for s in plan["testing"]["steps"]))
+
+    def test_classification_refactoring_cleanup(self):
+        issue_data = {
+            "owner": "psf",
+            "name": "requests",
+            "issue_number": 456,
+            "title": "Refactor session backend to reduce technical debt",
+            "labels": [{"name": "refactoring"}, {"name": "tech-debt"}],
+            "body": "Clean up internal session handlers and simplify class hierarchy.",
+            "state": "open",
+        }
+        plan = generate_contribution_plan(issue_data)
+        self.assertEqual(plan["objective"]["category"], "Refactoring / Cleanup")
+        self.assertTrue(any("refactor-issue-456" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("Refactor code incrementally" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("Establish Test Baseline" in s for s in plan["investigation"]["steps"]))
+
+    def test_classification_test_suite_improvement(self):
+        issue_data = {
+            "owner": "pallets",
+            "name": "click",
+            "issue_number": 789,
+            "title": "Add unit tests for payment webhook handling",
+            "labels": [{"name": "tests"}],
+            "body": "We need test coverage for webhook failures.",
+            "state": "open",
+        }
+        plan = generate_contribution_plan(issue_data)
+        self.assertEqual(plan["objective"]["category"], "Test Suite Improvement")
+        self.assertTrue(any("test-issue-789" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("automated test cases" in m for m in plan["implementation"]["milestones"]))
+        self.assertTrue(any("Review Test Structure" in s for s in plan["investigation"]["steps"]))
+
+    def test_classification_conflicting_and_ambiguous_signals(self):
+        # 1. Doc title with Bug label -> Doc wins
+        conflicting_doc = {
+            "owner": "test", "name": "repo", "issue_number": 1,
+            "title": "Fix typo in contributing guide",
+            "labels": [{"name": "bug"}],
+            "body": "Small typo on line 12 of CONTRIBUTING.md.",
+            "state": "open",
+        }
+        plan_doc = generate_contribution_plan(conflicting_doc)
+        self.assertEqual(plan_doc["objective"]["category"], "Documentation Improvement")
+
+        # 2. Test title with Feature label -> Test wins
+        conflicting_test = {
+            "owner": "test", "name": "repo", "issue_number": 2,
+            "title": "Add tests for user permissions",
+            "labels": [{"name": "enhancement"}],
+            "body": "Coverage needed for edge cases.",
+            "state": "open",
+        }
+        plan_test = generate_contribution_plan(conflicting_test)
+        self.assertEqual(plan_test["objective"]["category"], "Test Suite Improvement")
+
+        # 3. Bug title with Doc label -> Bug wins
+        conflicting_bug = {
+            "owner": "test", "name": "repo", "issue_number": 3,
+            "title": "Crash in routing table on empty route",
+            "labels": [{"name": "documentation"}],
+            "body": "Server panics when route is empty string.",
+            "state": "open",
+        }
+        plan_bug = generate_contribution_plan(conflicting_bug)
+        self.assertEqual(plan_bug["objective"]["category"], "Bug Fix")
+
+        # 4. Ambiguous / No signals fallback -> General Improvement
+        ambiguous = {
+            "owner": "test", "name": "repo", "issue_number": 4,
+            "title": "Discussion on upcoming roadmap",
+            "labels": [],
+            "body": "Meeting notes and open questions for the team.",
+            "state": "open",
+        }
+        plan_ambiguous = generate_contribution_plan(ambiguous)
+        self.assertEqual(plan_ambiguous["objective"]["category"], "General Improvement")
+        self.assertTrue(any("patch-issue-4" in m for m in plan_ambiguous["implementation"]["milestones"]))
+
+    def test_evidence_aware_recommendations_with_and_without_files(self):
+        # With files
+        with_files = {
+            "owner": "test", "name": "repo", "issue_number": 10,
+            "title": "Fix memory leak in router",
+            "labels": [{"name": "bug"}],
+            "body": "Memory leaks in `src/router.py` during route registration.",
+            "state": "open",
+        }
+        plan_with_files = generate_contribution_plan(with_files)
+        self.assertTrue(plan_with_files["evidence"]["has_files"])
+        self.assertTrue(any("src/router.py" in step for step in plan_with_files["investigation"]["steps"]))
+        self.assertTrue(any("src/router.py" in m for m in plan_with_files["implementation"]["milestones"]))
+        self.assertTrue(any("src/router.py" in s for s in plan_with_files["testing"]["steps"]))
+
+        # Without files
+        without_files = {
+            "owner": "test", "name": "repo", "issue_number": 11,
+            "title": "Support oauth2 token refresh",
+            "labels": [{"name": "enhancement"}],
+            "body": "Please add oauth2 token refresh support.",
+            "state": "open",
+        }
+        plan_without_files = generate_contribution_plan(without_files)
+        self.assertFalse(plan_without_files["evidence"]["has_files"])
+        self.assertTrue(any("Repository Keyword Search" in step for step in plan_without_files["investigation"]["steps"]))
+        self.assertTrue(any("Inspect Related Test Files" in step for step in plan_without_files["investigation"]["steps"]))
+        self.assertTrue(any("Search repository before editing" in m for m in plan_without_files["implementation"]["milestones"]))
+        self.assertTrue(any("Search existing test directories" in s for s in plan_without_files["testing"]["steps"]))
+
+
+class Issue2ContributionViewTests(TestCase):
+    """
+    Tests for Issue2Contribution controller (core.views.issue2contribution) and routing.
+    All service calls are mocked; zero network calls are made.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        AnalyzedRepository.objects.filter(owner="testpallets").delete()
+
+    def tearDown(self):
+        AnalyzedRepository.objects.filter(owner="testpallets").delete()
+
+    def test_get_issue_empty_state_renders_successfully(self):
+        response = self.client.get(reverse("issue2contribution"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Issue2Contribution")
+        self.assertEqual(response.context["issue_url"], "")
+        self.assertIsNone(response.context["issue"])
+        self.assertIsNone(response.context["plan"])
+        self.assertFalse(response.context["is_pull_request"])
+        self.assertIsNone(response.context["error_message"])
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_valid_issue_url_success(self, mock_analyze):
+        mock_analyze.return_value = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 5000,
+            "issue": {
+                "title": "Bug in url_prefix handling",
+                "body": "Detailed report...",
+                "state": "open",
+                "is_pull_request": False,
+            },
+            "plan": {
+                "objective": {"summary": "Address issue #5000", "category": "Bug Fix"},
+                "evidence": {"files": ["src/flask/blueprints.py"], "has_files": True},
+            },
+        }
+
+        response = self.client.post(reverse("issue2contribution"), {
+            "issue_url": "https://github.com/pallets/flask/issues/5000",
+        })
+        self.assertEqual(response.status_code, 200)
+        mock_analyze.assert_called_once_with("https://github.com/pallets/flask/issues/5000")
+        self.assertEqual(response.context["issue"]["title"], "Bug in url_prefix handling")
+        self.assertIsNotNone(response.context["plan"])
+        self.assertFalse(response.context["is_pull_request"])
+        self.assertIsNone(response.context["error_message"])
+        self.assertContains(response, "Bug in url_prefix handling")
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_get_with_issue_url_query_param_success(self, mock_analyze):
+        mock_analyze.return_value = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 5000,
+            "issue": {
+                "title": "Bug in url_prefix handling",
+                "state": "open",
+                "is_pull_request": False,
+            },
+            "plan": {
+                "objective": {"summary": "Address issue #5000", "category": "Bug Fix"},
+                "evidence": {"files": [], "has_files": False},
+            },
+        }
+
+        response = self.client.get(reverse("issue2contribution"), {
+            "issue_url": "pallets/flask#5000",
+        })
+        self.assertEqual(response.status_code, 200)
+        mock_analyze.assert_called_once_with("pallets/flask#5000")
+        self.assertEqual(response.context["issue"]["title"], "Bug in url_prefix handling")
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_invalid_url_displays_error(self, mock_analyze):
+        mock_analyze.side_effect = InvalidURLError("Invalid host. The URL must point to github.com.")
+
+        response = self.client.post(reverse("issue2contribution"), {
+            "issue_url": "https://evil.com/owner/repo/issues/1",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Invalid host", response.context["error_message"])
+        self.assertContains(response, "Invalid host")
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_pull_request_url_displays_notice(self, mock_analyze):
+        mock_analyze.side_effect = PullRequestNotSupportedError(
+            "The provided URL points to a Pull Request, not an Issue. Please provide a GitHub Issue URL."
+        )
+
+        response = self.client.post(reverse("issue2contribution"), {
+            "issue_url": "https://github.com/django/django/pull/123",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["is_pull_request"])
+        self.assertIn("Pull Request", response.context["error_message"])
+        self.assertContains(response, "Pull Request")
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_pull_request_payload_detected(self, mock_analyze):
+        mock_analyze.return_value = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 99,
+            "issue": {
+                "title": "Refactor router",
+                "state": "open",
+                "is_pull_request": True,
+            },
+            "plan": None,
+        }
+
+        response = self.client.post(reverse("issue2contribution"), {
+            "issue_url": "pallets/flask#99",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["is_pull_request"])
+        self.assertIsNone(response.context["plan"])
+        self.assertIn("Pull Request", response.context["error_message"])
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_issue_not_found_displays_error(self, mock_analyze):
+        mock_analyze.side_effect = IssueNotFoundError("Issue #99999 was not found on GitHub or the repository is private.")
+
+        response = self.client.post(reverse("issue2contribution"), {
+            "issue_url": "django/django#99999",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("not found on GitHub", response.context["error_message"])
+        self.assertContains(response, "not found on GitHub")
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_rate_limit_and_network_errors(self, mock_analyze):
+        mock_analyze.side_effect = RateLimitError("GitHub API rate limit exceeded")
+        resp_rate = self.client.post(reverse("issue2contribution"), {"issue_url": "django/django#10"})
+        self.assertEqual(resp_rate.status_code, 200)
+        self.assertIn("rate limit exceeded", resp_rate.context["error_message"].lower())
+        self.assertContains(resp_rate, "rate limit exceeded")
+
+        mock_analyze.side_effect = NetworkError("Connection timed out")
+        resp_net = self.client.post(reverse("issue2contribution"), {"issue_url": "django/django#10"})
+        self.assertEqual(resp_net.status_code, 200)
+        self.assertIn("network error", resp_net.context["error_message"].lower())
+        self.assertContains(resp_net, "Network error")
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_authentication_and_generic_service_error(self, mock_analyze):
+        mock_analyze.side_effect = AuthenticationError("Bad credentials")
+        resp_auth = self.client.post(reverse("issue2contribution"), {"issue_url": "django/django#10"})
+        self.assertEqual(resp_auth.status_code, 200)
+        self.assertIn("authentication failed", resp_auth.context["error_message"].lower())
+        self.assertContains(resp_auth, "authentication failed")
+
+        mock_analyze.side_effect = GitHubServiceError("Unexpected upstream status 500")
+        resp_err = self.client.post(reverse("issue2contribution"), {"issue_url": "django/django#10"})
+        self.assertEqual(resp_err.status_code, 200)
+        self.assertIn("GitHub service error", resp_err.context["error_message"])
+        self.assertContains(resp_err, "GitHub service error")
+        self.assertNotIn("status 500", resp_err.context["error_message"])
+        self.assertNotIn("Unexpected upstream", resp_err.content.decode())
+
+    def test_post_empty_and_whitespace_url_displays_validation_error(self):
+        cases = [
+            {},
+            {"issue_url": ""},
+            {"issue_url": "   "},
+            {"url": ""},
+            {"url": " \t \n "},
+        ]
+        for data in cases:
+            with self.subTest(data=data):
+                response = self.client.post(reverse("issue2contribution"), data)
+                self.assertEqual(response.status_code, 200)
+                expected_msg = "Please provide a valid GitHub issue URL or owner/repo#number."
+                self.assertEqual(response.context["error_message"], expected_msg)
+                self.assertContains(response, expected_msg)
+                self.assertIsNone(response.context["issue"])
+                self.assertIsNone(response.context["plan"])
+
+    @patch("core.views.logger.exception")
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_unexpected_exception_logged_and_sanitized(self, mock_analyze, mock_log_exc):
+        mock_analyze.side_effect = RuntimeError("Internal unexpected failure")
+        response = self.client.post(reverse("issue2contribution"), {"issue_url": "pallets/flask#10"})
+        self.assertEqual(response.status_code, 200)
+        mock_log_exc.assert_called_once()
+        expected_msg = "An unexpected error occurred while analyzing the issue. Please try again."
+        self.assertEqual(response.context["error_message"], expected_msg)
+        self.assertContains(response, expected_msg)
+        self.assertNotContains(response, "Internal unexpected failure")
+
+    def test_unsupported_http_methods_rejected(self):
+        resp_put = self.client.put(reverse("issue2contribution"))
+        self.assertEqual(resp_put.status_code, 405)
+
+        resp_del = self.client.delete(reverse("issue2contribution"))
+        self.assertEqual(resp_del.status_code, 405)
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_links_existing_analyzed_repository_context(self, mock_analyze):
+        repo = AnalyzedRepository.objects.create(
+            owner="testpallets",
+            name="flask",
+            url="https://github.com/testpallets/flask",
+            readiness_score=88.5,
+            primary_language="Python",
+        )
+
+        mock_analyze.return_value = {
+            "owner": "testpallets",
+            "name": "flask",
+            "issue_number": 5000,
+            "issue": {"title": "Test Issue", "state": "open", "is_pull_request": False},
+            "plan": {"objective": {"summary": "Plan summary"}, "evidence": {}},
+        }
+
+        response = self.client.post(reverse("issue2contribution"), {"issue_url": "testpallets/flask#5000"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.context["repo_context"])
+        self.assertEqual(response.context["repo_context"].id, repo.id)
+        self.assertEqual(response.context["repo_context"].readiness_score, 88.5)
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_without_existing_analyzed_repository_context_is_none(self, mock_analyze):
+        mock_analyze.return_value = {
+            "owner": "unknownorg",
+            "name": "unknownrepo",
+            "issue_number": 1,
+            "issue": {"title": "Unknown", "state": "open", "is_pull_request": False},
+            "plan": {"objective": {"summary": "Plan summary"}, "evidence": {}},
+        }
+
+        response = self.client.post(reverse("issue2contribution"), {"issue_url": "unknownorg/unknownrepo#1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context["repo_context"])
+
+    def test_page_renders_with_csrf_token_and_form(self):
+        response = self.client.get(reverse("issue2contribution"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="csrfmiddlewaretoken"')
+        self.assertContains(response, 'id="issue_url"')
+        self.assertContains(response, "Analyze Issue")
+        self.assertContains(response, "Repository Analysis")
+        self.assertContains(response, "OSS Navigator")
+        self.assertContains(response, "OSS Mentor")
+        self.assertContains(response, "Issue2Contribution")
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_preserves_submitted_issue_url_in_form(self, mock_analyze):
+        mock_analyze.return_value = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 5000,
+            "issue": {"title": "Issue title", "state": "open", "is_pull_request": False},
+            "plan": {"objective": {"summary": "Summary"}, "evidence": {}},
+        }
+        submitted_url = "https://github.com/pallets/flask/issues/5000"
+        response = self.client.post(reverse("issue2contribution"), {"issue_url": submitted_url})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["issue_url"], submitted_url)
+        self.assertContains(response, f'value="{submitted_url}"')
+
+    @patch("core.views.analyze_issue_and_generate_plan")
+    def test_post_successful_analysis_renders_all_six_plan_sections_and_evidence(self, mock_analyze):
+        mock_analyze.return_value = {
+            "owner": "pallets",
+            "name": "flask",
+            "issue_number": 5000,
+            "issue": {
+                "title": "Bug in url_prefix handling",
+                "body": "Detailed report...",
+                "state": "open",
+                "author": "tester",
+                "author_avatar": "https://avatars.githubusercontent.com/u/1",
+                "author_url": "https://github.com/tester",
+                "labels": [{"name": "bug", "color": "d73a4a", "description": "Bug label"}],
+                "comments_count": 3,
+                "is_pull_request": False,
+            },
+            "plan": {
+                "objective": {
+                    "title": "Issue Objective & Scope",
+                    "category": "Bug Fix",
+                    "state": "open",
+                    "is_good_first_issue": True,
+                    "summary": "Address issue #5000",
+                    "explanation": "Detailed explanation of bug fix",
+                },
+                "investigation": {
+                    "title": "Pre-Coding Investigation",
+                    "steps": ["Step A: Review Discussions", "Step B: Verify Failure Locally"],
+                },
+                "evidence": {
+                    "title": "Relevant Files & Component Evidence",
+                    "has_files": True,
+                    "files": ["src/flask/blueprints.py"],
+                    "symbols": ["Blueprint.register()"],
+                    "errors": ["TypeError: url_prefix must be str"],
+                    "component_labels": ["area:routing"],
+                    "notice": "Inspect these files first as direct starting points:",
+                },
+                "implementation": {
+                    "title": "Suggested Implementation Path",
+                    "milestones": ["Milestone 1: Create feature branch", "Milestone 2: Apply patch"],
+                    "disclaimer": "Do not assume root cause without testing.",
+                },
+                "testing": {
+                    "title": "Testing & Verification Guidance",
+                    "steps": ["Test step 1: Add automated regression test", "Test step 2: Run test suite"],
+                },
+                "pull_request": {
+                    "title": "Pull Request Preparation",
+                    "closing_keyword": "Fixes #5000",
+                    "guidelines": ["Guideline 1: Atomic commits", "Guideline 2: Reference issue"],
+                },
+            },
+        }
+
+        response = self.client.post(reverse("issue2contribution"), {
+            "issue_url": "pallets/flask#5000",
+        })
+        self.assertEqual(response.status_code, 200)
+
+        # Verify all 6 plan section titles rendered
+        self.assertContains(response, "Issue Objective &amp; Scope")
+        self.assertContains(response, "Pre-Coding Investigation")
+        self.assertContains(response, "Relevant Files &amp; Component Evidence")
+        self.assertContains(response, "Suggested Implementation Path")
+        self.assertContains(response, "Testing &amp; Verification Guidance")
+        self.assertContains(response, "Pull Request Preparation")
+
+        # Verify evidence rendered
+        self.assertContains(response, "src/flask/blueprints.py")
+        self.assertContains(response, "Blueprint.register()")
+        self.assertContains(response, "TypeError: url_prefix must be str")
+        self.assertContains(response, "area:routing")
+
+        # Verify closing keyword and safe copy-button attributes
+        self.assertContains(response, "Fixes #5000")
+        self.assertContains(response, 'data-copy-text="src/flask/blueprints.py"')
+        self.assertContains(response, 'data-copy-text="Fixes #5000"')
+        self.assertNotContains(response, 'onclick="navigator.clipboard')
+
+    def test_all_navbars_include_issue2contribution_link(self):
+        resp_home = self.client.get(reverse("home"))
+        self.assertEqual(resp_home.status_code, 200)
+        self.assertContains(resp_home, 'href="/issue/"')
+
+        resp_nav = self.client.get(reverse("navigator"))
+        self.assertEqual(resp_nav.status_code, 200)
+        self.assertContains(resp_nav, 'href="/issue/"')
+
+        resp_mentor = self.client.get(reverse("mentor"))
+        self.assertEqual(resp_mentor.status_code, 200)
+        self.assertContains(resp_mentor, 'href="/issue/"')
