@@ -1,7 +1,10 @@
+import logging
 import re
 from django.shortcuts import render, redirect
 from django.contrib import messages
 from .models import AnalyzedRepository, OnboardingProgress
+
+logger = logging.getLogger(__name__)
 from .checklist import generate_onboarding_checklist
 from .github_service import (
     analyze_and_save_repository,
@@ -15,6 +18,14 @@ from .github_service import (
     GitHubServiceError,
     RateLimitError,
     AuthenticationError,
+)
+from django.views.decorators.http import require_http_methods
+from django.template import TemplateDoesNotExist
+from django.http import HttpResponse
+from .issue_service import (
+    analyze_issue_and_generate_plan,
+    IssueNotFoundError,
+    PullRequestNotSupportedError,
 )
 
 
@@ -329,3 +340,106 @@ def mentor_toggle_step(request):
         progress.save(update_fields=["completed_steps", "updated_at"])
 
     return redirect(f"/mentor/?repo={repo_owner}/{repo_name}")
+
+
+@require_http_methods(["GET", "POST"])
+def issue2contribution(request):
+    """
+    Controller for Issue2Contribution:
+    - GET: renders initial issue input form or temporary minimal response for Phase 2.
+    - POST: accepts a public GitHub issue URL or shorthand, analyzes the issue,
+      generates the 6-part contribution plan, links existing repository context if available,
+      and renders the result without database writes.
+    """
+    issue_url = ""
+    issue_data = None
+    plan = None
+    evidence = None
+    is_pull_request = False
+    repo_context = None
+    error_message = None
+
+    if request.method == "POST":
+        issue_url = request.POST.get("issue_url", "").strip() or request.POST.get("url", "").strip()
+        if not issue_url:
+            error_message = "Please provide a valid GitHub issue URL or owner/repo#number."
+    elif request.method == "GET":
+        issue_url = request.GET.get("issue_url", "").strip() or request.GET.get("url", "").strip()
+
+    if issue_url:
+        try:
+            analysis = analyze_issue_and_generate_plan(issue_url)
+            owner = analysis.get("owner")
+            name = analysis.get("name")
+            issue_data = analysis.get("issue")
+            plan = analysis.get("plan")
+            is_pull_request = bool(issue_data and issue_data.get("is_pull_request"))
+
+            if is_pull_request:
+                error_message = (
+                    f"Item #{analysis.get('issue_number')} is a Pull Request, not an issue. "
+                    "Issue2Contribution generates contribution plans for open issues."
+                )
+
+            if plan:
+                evidence = plan.get("evidence")
+
+            if owner and name:
+                repo_context = AnalyzedRepository.objects.filter(
+                    owner__iexact=owner,
+                    name__iexact=name,
+                ).first()
+
+        except PullRequestNotSupportedError as e:
+            is_pull_request = True
+            error_message = str(e)
+        except InvalidURLError as e:
+            error_message = str(e)
+        except IssueNotFoundError as e:
+            error_message = str(e)
+        except RepositoryNotFoundError as e:
+            error_message = "The specified repository was not found on GitHub or is private."
+        except RateLimitError as e:
+            error_message = "GitHub API rate limit exceeded. Please try again later or configure a GitHub personal access token."
+        except AuthenticationError as e:
+            error_message = "GitHub authentication failed. Please check your credentials."
+        except NetworkError as e:
+            error_message = "Network error connecting to GitHub. Please check your connection and try again."
+        except GitHubServiceError:
+            logger.exception("GitHub service error occurred while analyzing issue.")
+            error_message = "A GitHub service error occurred while communicating with GitHub. Please try again later."
+        except Exception:
+            logger.exception("Unexpected error occurred while analyzing issue.")
+            error_message = "An unexpected error occurred while analyzing the issue. Please try again."
+
+    context = {
+        "issue_url": issue_url,
+        "issue": issue_data,
+        "plan": plan,
+        "evidence": evidence,
+        "is_pull_request": is_pull_request,
+        "repo_context": repo_context,
+        "analyzed_repo": repo_context,
+        "error_message": error_message,
+        "error": error_message,
+    }
+
+    template_name = "core/issue2contribution.html"
+    try:
+        return render(request, template_name, context)
+    except TemplateDoesNotExist:
+        from django.template import engines
+        template = engines["django"].from_string(
+            "<!DOCTYPE html><html><head><title>Issue2Contribution</title></head>"
+            "<body><h1>Issue2Contribution</h1>"
+            "{% if error_message %}<div class='alert alert-danger'>{{ error_message }}</div>{% endif %}"
+            "{% if is_pull_request %}<div class='alert alert-info'>Pull Request detected.</div>{% endif %}"
+            "{% if issue %}<div class='issue-title'>{{ issue.title }}</div>{% endif %}"
+            "{% if plan %}<div class='plan-objective'>{{ plan.objective.summary }}</div>{% endif %}"
+            "{% if repo_context %}<div class='repo-context'>{{ repo_context.name }}</div>{% endif %}"
+            "</body></html>"
+        )
+        content = template.render(context, request)
+        response = HttpResponse(content, status=200)
+        response.context = context
+        return response
